@@ -45,6 +45,8 @@ from .prompts import (
     EMPTY_SCREEN_NOTICE,
     SEE_IT_FIRST_NOTICE,
     PULL_NOTICE,
+    LOOP_NOTICE,
+    SCROLL_NOTICE,
     STALE_SCREEN_NOTICE,
     FINAL_TURN_NOTICE,
     LANGUAGE_FIX_PROMPT,
@@ -172,6 +174,14 @@ def action_tools(with_labels: bool = True, with_maps: bool = True,
         ("web_scroll", "Scroll the page.",
          {"pages": _num("how many screens, 1 by default")}, ("pages",)),
 
+        ("need_verification",
+         "The screen is asking for a human check you cannot pass -- a slider to "
+         "drag, a puzzle piece, a grid of images to tap, a code to type. Hands "
+         "the app to the user, waits for them, then continues. Call this "
+         "instead of trying the check yourself: solving a captcha is how an "
+         "account gets flagged.",
+         {"reason": _str("what the user has to do, one short sentence")},
+         ("reason",)),
         ("ask_user",
          "Ask the user a question and wait for the reply. Use it when the task "
          "needs a choice, a value that is not on screen (a password, an address, "
@@ -230,6 +240,17 @@ _ROUTE_RE = re.compile(r"^\s*(OP|MACRO_VLM|NEED_VLM|FINISH)\s*:\s*(.*)$", re.IGN
 _NODE_RE = re.compile(r"<node\b([^>]*)>")
 _PACKAGE_RE = re.compile(r'package="([^"]*)"')
 _BOUNDS_RE = re.compile(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"')
+
+
+def _looks_blank(png: bytes) -> bool:
+    """True when a screenshot carries no real content.
+
+    A 1280x2772 PNG of a black screen compresses to a few kilobytes; any app
+    screen -- even a plain settings list -- is an order of magnitude larger. Used
+    only to tell "the display is empty" from "the app is slow", never to judge
+    what is on screen.
+    """
+    return not png or len(png) < 20000
 
 
 def parse_action(text: str) -> Optional[dict]:
@@ -529,6 +550,8 @@ class PhoneAgent:
         self._risk_path = getattr(self.config, "risk_path", "")
         #: package -> how many pulls were refused in this task
         self._pull_attempts: dict = {}
+        #: which app the last pull brought back, for the launch grace period
+        self._pulled_package: str = ""
         # (app_map, screen_id, description) the map says a finished task should
         # have landed on; set by the macro layer before handing over to the VLM
         self._expectation = None
@@ -668,6 +691,23 @@ class PhoneAgent:
                 self.log(f"could not translate the answer: {exc}")
             return answer
         return translated or answer
+
+    def _blank_frame(self, png: bytes) -> bool:
+        """True when the display is drawing nothing.
+
+        Prefers the helper's own count of non-black pixels over the size of the
+        PNG: the size is a proxy, the count is measured. Falls back to the size
+        for a device that cannot report it (hands-off screenshots, older jar).
+        """
+        state = getattr(self.device, "frame_state", None)
+        if callable(state):
+            try:
+                percent, _changed = state()
+            except Exception:  # noqa: BLE001 - a statistic must not fail a task
+                percent = -1
+            if percent >= 0:
+                return percent < 1
+        return _looks_blank(png)
 
     def _record_spill(self, package: str, pulled: bool) -> None:
         """Count pulls that worked and pulls that did not, per app.
@@ -871,7 +911,7 @@ class PhoneAgent:
         # so it has to be recognised before "there is nothing here" is reported:
         # the two need opposite answers.
         if CHALLENGE_RE.search(xml or ""):
-            return self._challenged(0)
+            return self._challenged(0, allow_resume=False)
         if self._ui_texts(xml):
             return None
         return self._result(
@@ -1464,6 +1504,11 @@ class PhoneAgent:
         noticed: set[int] = set()  # progress checks already delivered
         pending_notice = ""        # set when the previous turn needed correcting
         last_action = ""           # wait() is the one action that should not move the screen
+        waits_in_a_row = 0         # consecutive waits with an unchanged screen
+        scroll_streak = 0          # consecutive scrolls, any direction
+        scroll_total = 0           # scrolls in this task, never reset
+        scroll_noticed = False     # the one "stop scrolling and decide" hint
+        loop_nudged = False        # the one "do something different" hint
         if getattr(self, "_budget", None) is None:
             self._budget = _Budget(self.config.max_rounds)
         for round_no in range(1, self.config.max_rounds + 1):
@@ -1489,6 +1534,55 @@ class PhoneAgent:
                 png = self.device.screenshot()
             except DeviceError as exc:
                 return self._result(False, "", f"device error: {exc}", round_no)
+
+            # A pull moves the task between displays, and the accessibility tree
+            # is empty for a moment afterwards. Feeding that to the model reads
+            # as "the app is gone": it answers by launching the app again (which
+            # the grace period refuses) or by trying shell commands, and the
+            # stale-screen guard ends the task. Measured on 大众点评 right after
+            # a pull: twelve rounds, no tap, `partial`.
+            if getattr(self, "_pulled_package", "") and not self._ui_texts(xml):
+                for _ in range(3):
+                    self.sleep(0.8)
+                    try:
+                        xml = self.device.dump_ui()
+                        png = self.device.screenshot()
+                    except DeviceError:
+                        break
+                    if self._ui_texts(xml):
+                        break
+                if not self._ui_texts(xml) and self._blank_frame(png):
+                    # The move left the surface without content: the task is on
+                    # our display, but nothing is drawn there, and the model
+                    # reads the black frame as a page that is still loading.
+                    # Re-open the app on this display to force a redraw, and if
+                    # that does not work, stop pretending and follow it to the
+                    # user's screen -- a phone that is taken over is better than
+                    # a task that waits forever on an empty display.
+                    package = getattr(self, "_pulled_package", "")
+                    self.log(f"[agent] {package}: blank frame after the pull; "
+                             f"reopening it on this display")
+                    try:
+                        self.device.launch(package, wait=2.0)
+                    except (DeviceError, LaunchRefused):
+                        pass
+                    self.sleep(1.0)
+                    try:
+                        xml = self.device.dump_ui()
+                        png = self.device.screenshot()
+                    except DeviceError:
+                        pass
+                    if not self._ui_texts(xml) and self._blank_frame(png):
+                        follow = getattr(self.device, "follow_to_user_display", None)
+                        if follow is not None and follow():
+                            self.steps.append(Step(
+                                round_no, "follow", self._app_label(package),
+                                "blank after the pull; driving it on the user's display"))
+                            self.history.append(
+                                f"把 {self._app_label(package)} 搬回后台后画面是黑的，"
+                                f"改成在你的屏幕上继续做。")
+                            self.log("[agent] still blank after reopening; following")
+                self._pulled_package = ""
 
             # (The escape is checked right after each action and again just
             # before acting -- two lookups per round, both a single dumpsys.
@@ -1518,40 +1612,100 @@ class PhoneAgent:
                 )
 
             # Whatever the app is showing, a challenge is the user's to answer.
-            # Tapping at a captcha is how an account gets locked.
+            # Tapping at a captcha is how an account gets locked. If they solve
+            # it and say so, the run continues instead of ending.
             if CHALLENGE_RE.search(xml or ""):
-                return self._challenged(round_no)
+                outcome = self._challenged(round_no)
+                if outcome is not None:
+                    return outcome
+                continue
 
             # Whether the screen moved decides what a repeated action means.
             # Scrolling a page three times is progress, not a loop; the tree
             # alone cannot tell (a WebView's is one node), so the signature
             # includes the page's own state.
+            signature_text = self._screen_signature(xml) or ""
             digest = hashlib.sha1(
-                (self._screen_signature(xml) or "").encode("utf-8", "replace")
+                signature_text.encode("utf-8", "replace")
             ).hexdigest()
             unchanged = digest == signature
+            # An unreadable tree (a canvas, a WebView with nothing to read) makes
+            # every round look identical even while the screen is moving. The
+            # helper now reports whether the picture changed, which is the only
+            # progress signal left in that case -- but never to claim progress:
+            # it can only turn "unchanged" into "changed", not the other way.
+            if unchanged:
+                state = getattr(self.device, "frame_state", None)
+                if callable(state):
+                    try:
+                        percent, changed = state()
+                    except Exception:  # noqa: BLE001
+                        changed = False
+                    else:
+                        if percent >= 0 and changed:
+                            unchanged = False
+
+            # A long scroll run is not progress. Measured on 大众点评: after the
+            # shop page opened, the model scrolled 27 times in a row (down and
+            # up) and only then finished -- every scroll changed the picture, so
+            # the stale guard saw progress, and the calls differed in direction,
+            # so the loop guard saw no repetition.
+            if last_action == "tap" and unchanged:
+                self._tap_nochange = getattr(self, "_tap_nochange", 0) + 1
+            elif last_action == "tap":
+                self._tap_nochange = 0
+            self._tap_blocked = 1 if getattr(self, "_tap_nochange", 0) >= 2 else 0
+
+            scrolled = last_action == "scroll" or bool(
+                getattr(self, "_last_was_scroll", False))
+            self._last_was_scroll = False
+            if scrolled:
+                scroll_streak += 1
+                scroll_total += 1
+            else:
+                scroll_streak = 0
 
             if self._loop_detected(unchanged):
                 # "loop" alone tells the user nothing about what happened; say
-                # which action kept repeating.
+                # which action kept repeating. Give the model one chance to
+                # change its approach first: measured twice on 大众点评, the app
+                # was on a page the task did not start from, three taps on the
+                # title changed nothing, and the run died before anything could
+                # correct it -- a back() or a launch() was all it needed.
                 repeated = ", ".join(self.actions[-self.config.loop_threshold:])
-                return self._result(
-                    False,
-                    f"连续 {self.config.loop_threshold} 次做了同一个动作（{repeated}），"
-                    f"屏幕没有变化，已停止。",
-                    "loop",
-                    round_no,
-                )
+                if not loop_nudged:
+                    loop_nudged = True
+                    pending_notice = LOOP_NOTICE
+                    self.actions.clear()
+                    self.log(f"[agent] repeated action ({repeated}); nudging once")
+                else:
+                    return self._result(
+                        False,
+                        f"连续 {self.config.loop_threshold} 次做了同一个动作（{repeated}），"
+                        f"屏幕没有变化，已停止。",
+                        "loop",
+                        round_no,
+                    )
 
             # Nothing changed since the last round: the model is acting but the
             # screen is not moving. Two taps on the same label look exactly like
             # this, so stop and report rather than burn the budget.
             if unchanged:
                 # A deliberate wait does not change the screen, and neither does
-                # reading a page: neither is evidence of being stuck.
-                if (last_action not in ("wait", "")
-                        and last_action not in self.READ_ONLY_TOOLS
-                        and last_action not in self.SCREENLESS_ACTIONS):
+                # reading a page: neither is evidence of being stuck. But a run
+                # of waits with nothing arriving *is* stuck: a black frame after
+                # a display move reads to the model as "loading", and it waited
+                # fourteen times in a row against an empty screen (measured on
+                # 大众点评 after a pull) until the budget ran out.
+                if last_action == "wait":
+                    waits_in_a_row += 1
+                else:
+                    waits_in_a_row = 0
+                waiting_forever = waits_in_a_row >= 3
+                if (waiting_forever
+                        or (last_action not in ("wait", "")
+                            and last_action not in self.READ_ONLY_TOOLS
+                            and last_action not in self.SCREENLESS_ACTIONS)):
                     stale_rounds += 1
             else:
                 stale_rounds = 0
@@ -1572,6 +1726,26 @@ class PhoneAgent:
                     self._partial_answer(missing) if achieved else missing,
                     "partial" if achieved else
                     f"no_new_data: the screen did not change over {stale_rounds} rounds",
+                    round_no,
+                )
+
+            self._scroll_blocked = 1 if (scroll_streak >= 6 or scroll_total >= 8) else 0
+            if scroll_streak >= 6 and not scroll_noticed:
+                scroll_noticed = True
+                pending_notice = SCROLL_NOTICE
+            # Only stop when the scrolling is not moving anything: a long shop
+            # page legitimately takes ten scrolls to read, and the first version
+            # of this guard killed a run that was making progress (measured:
+            # take 9 stopped after 11 scrolls on 大众点评's shop page).
+            if (scroll_streak >= 10 or scroll_total >= 16) and unchanged:
+                missing = (f"这次任务已经滚动了 {scroll_total} 次仍没有新的结论，"
+                           f"就停在这里了。")
+                achieved = self._achieved()
+                return self._result(
+                    False,
+                    self._partial_answer(missing) if achieved else missing,
+                    "partial" if achieved else
+                    f"scroll_loop: {scroll_streak} scrolls without a decision",
                     round_no,
                 )
 
@@ -1617,6 +1791,27 @@ class PhoneAgent:
                     offered = action_tools(self.config.include_ui_text,
                                            with_maps=bool(self.maps),
                                            with_marks=bool(self._current_marks))
+                    if getattr(self, "_tap_blocked", 0) > 0:
+                        # Two blind taps at the same spot changed nothing. The
+                        # model kept going -- three more at (0.39, 0.08) ended a
+                        # run on 大众点评 -- so the tool goes away for a round and
+                        # the numbered targets are what is left.
+                        offered = [t for t in offered
+                                   if t["function"]["name"] != "tap"]
+                        self.log("[agent] tap withheld (two taps changed nothing)")
+                    if scroll_streak >= 6 or scroll_total >= 8:
+                        # A notice was not enough: measured on 大众点评, the model
+                        # read "stop scrolling, open the tab instead" and scrolled
+                        # ten more times. Taking the tool away is what changes the
+                        # next call -- the tab, back(), or finish().
+                        offered = [t for t in offered
+                                   if t["function"]["name"] != "scroll"]
+                        self.log(f"[agent] scroll withheld "
+                                 f"({scroll_streak} in a row, {scroll_total} in total)")
+                    if getattr(self, "ask", None) is None:
+                        # nobody to hand the app to: the tool would only block
+                        offered = [t for t in offered
+                                   if t["function"]["name"] != "need_verification"]
                     if final_turn:
                         # last step: only the honest answer is left
                         offered = [t for t in offered if t["function"]["name"] == "finish"]
@@ -1692,7 +1887,12 @@ class PhoneAgent:
                 if getattr(self, "_last_escape", "") == "pull":
                     pending_notice = PULL_NOTICE
                 continue
+            self._round_no = round_no
             ok = self._execute_action(name, args)
+            if getattr(self, "_pending_result", None) is not None:
+                pending = self._pending_result
+                self._pending_result = None
+                return pending
             self._touch()
             if name in self.SCREEN_CHANGING:
                 self._settle()
@@ -2207,6 +2407,14 @@ class PhoneAgent:
             if name in ("tap", "long_press"):
                 if len(args) < 2:
                     return False
+                if name == "tap" and getattr(self, "_tap_blocked", 0) > 0:
+                    self.history.append(
+                        "tap: refused -- two taps already changed nothing. Use "
+                        "tap_index() on a numbered target, tap_text() with the "
+                        "label you can read, or back() to leave this screen."
+                    )
+                    self.log("[agent] tap refused (blind taps)")
+                    return False
                 x, y = device.info().to_pixels((float(args[0]), float(args[1])))
                 # A coordinate tap carries no label, so the label has to be read
                 # off the screen: whatever sits under the finger is what would be
@@ -2219,6 +2427,25 @@ class PhoneAgent:
                 return bool(device.long_press(x, y))
 
             if name == "swipe":
+                # A vertical swipe scrolls the same page; the model reached for
+                # it the moment `scroll` was withheld (measured: four swipes
+                # right after "scroll withheld"). Count it towards the same
+                # budget, and refuse it there too.
+                try:
+                    rx1, ry1, rx2, ry2 = (float(str(a).strip("\"'")) for a in args[:4])
+                except (TypeError, ValueError):
+                    rx1 = ry1 = rx2 = ry2 = 0.0
+                vertical = abs(ry2 - ry1) > abs(rx2 - rx1)
+                self._last_was_scroll = vertical
+                if vertical and getattr(self, "_scroll_blocked", 0) > 0:
+                    self.history.append(
+                        "swipe: refused -- this page has been scrolled many "
+                        "times already. Open the tab or button that holds what "
+                        "you need (tap_text / tap_index), or finish() with what "
+                        "you have."
+                    )
+                    self.log("[agent] swipe refused (scroll budget spent)")
+                    return False
                 return self._swipe(args)
 
             if name in ("type", "text", "input_text"):
@@ -2266,17 +2493,27 @@ class PhoneAgent:
                 # A singleTask launcher activity cannot be placed on this
                 # display: `am start --display N` puts it on the user's screen
                 # instead. Refuse before trying, so the phone stays untouched.
-                if getattr(self, "_launch_grace", 0) > 0:
-                    # Just brought the app back from the user's screen. It is
+                pulled = getattr(self, "_pulled_package", "")
+                if getattr(self, "_launch_grace", 0) > 0 and package == pulled:
+                    # Just brought this app back from the user's screen. It is
                     # open, on the page it was; launching again re-opens the
                     # NEW_TASK page that escapes in the first place.
+                    #
+                    # Only for that app: the grace period used to refuse every
+                    # launch, so a task that needed a *different* app right
+                    # after a pull could not open it, tried `am start` and
+                    # `monkey` instead, was refused for driving the phone, and
+                    # looped until the stale-screen guard ended the task.
                     self.history.append(
-                        "launch skipped: the app was just brought back to this "
+                        "launch skipped: this app was just brought back to this "
                         "display and is open. Work on the screen in front of you "
                         "-- type() to enter text, tap_index() to tap."
                     )
                     self.log("[agent] launch skipped (just pulled back)")
                     return False
+                if getattr(self, "_launch_grace", 0) > 0 and package != pulled:
+                    # A different app: the grace period is not about it.
+                    self._launch_grace = 0
                 mode = self._launch_mode(package)
                 # singleTask / singleInstance tasks stay on the display their
                 # task was created on; standard (0) and singleTop (1) go where
@@ -2301,7 +2538,7 @@ class PhoneAgent:
                         try:
                             return bool(device.launch(package))
                         except NeedsHandover as exc:
-                            return self._hand_over_app(exc.package)
+                            return self._follow_launched(exc.package)
                     name_text = self._app_label(package)
                     raise _Stranded(
                         f"「{name_text}」的主界面声明为 singleTask，系统只会把它放在你自己的屏幕上，"
@@ -2324,10 +2561,17 @@ class PhoneAgent:
                 launches = getattr(self, "_launch_counts", None)
                 if launches is None:
                     launches = self._launch_counts = {}
-                if launches.get(package, 0) >= 2:
-                    # Unconditional: whether current_app() reports the package is
-                    # unreliable on a virtual display, and reopening cannot be
-                    # the right move three times in one task either way.
+                # The cap only applies while that app is the one on screen: if
+                # it is not even running, launching it is not "relaunching
+                # instead of working". Measured: two launches of 高德 were
+                # counted while 大众点评 was in front, and the traffic leg of a
+                # demo ended with "launch skipped (opened 2x)" four times.
+                on_screen = False
+                try:
+                    on_screen = str(device.current_app() or "") == package
+                except Exception:  # noqa: BLE001 - the cap is a guess without it
+                    on_screen = True
+                if launches.get(package, 0) >= 2 and on_screen:
                     name_text = self._app_label(package)
                     self.history.append(
                         f"launch {name_text} skipped: it was already opened "
@@ -2377,7 +2621,7 @@ class PhoneAgent:
                         launches[package] = launches.get(package, 0) + 1
                     return started
                 except NeedsHandover as exc:
-                    return self._hand_over_app(exc.package)
+                    return self._follow_launched(exc.package)
 
             if name == "tap_text":
                 label = str(args[0]) if args else ""
@@ -2385,7 +2629,32 @@ class PhoneAgent:
                     return False
                 return self._tap_text(label)
 
+            if name == "need_verification":
+                # The control tree often has no text for a WebView/canvas
+                # captcha, so CHALLENGE_RE cannot see it. The model can see it
+                # in the screenshot; this is how it says so.
+                reason = str(args[0]).strip("\"'") if args else ""
+                outcome = self._challenged(getattr(self, "_round_no", 1))
+                if outcome is not None:
+                    self._pending_result = outcome
+                    return False
+                self.history.append(
+                    f"the user finished the verification"
+                    + (f" ({reason})" if reason else "")
+                    + "; the app is back on this display -- look again before acting.")
+                return True
+
             if name == "scroll":
+                self._last_was_scroll = True
+                if getattr(self, "_scroll_blocked", 0) > 0:
+                    self.history.append(
+                        "scroll: refused -- this page has been scrolled many "
+                        "times already. Open the tab or button that holds what "
+                        "you need (tap_text / tap_index), or finish() with what "
+                        "you have."
+                    )
+                    self.log("[agent] scroll refused (too many in a row)")
+                    return False
                 return self._scroll(str(args[0]).strip("\"'") if args else "down")
 
             if name == "macro":
@@ -2430,7 +2699,10 @@ class PhoneAgent:
                 if self.ask is None:
                     self.history.append("ask_user: no one to ask")
                     return False
-                reply = self.ask(question)
+                # Same keep-alive as a captcha hand-over: the user reading the
+                # question looks like a wedge to the watchdog, which killed a
+                # run 240 s into a question it was waiting on.
+                reply = self._ask_while_keeping_alive(self.ask, question)
                 if reply is None:
                     self.history.append(f"ask_user: no reply to {question!r}")
                     return False
@@ -2582,14 +2854,40 @@ class PhoneAgent:
         cache[package] = mode
         return mode
 
-    def _challenged(self, round_no: int) -> TaskResult:
-        """Stop, hand the app to the user, and do not try again for a while.
+    def _ask_while_keeping_alive(self, ask, question: str):
+        """Ask the user, touching the heartbeat while they take their time.
 
-        Every retry at a captcha makes the account look worse. The app is moved
-        to the user's screen so they can solve it, and the package is parked for
-        a cooldown so the next task does not walk straight back into it.
+        The stall watchdog only sees "no progress for N seconds", and a person
+        solving a captcha looks exactly like a wedged call: measured, the task
+        was killed 240 s into a hand-over that the user was still working on.
+        """
+        stop = threading.Event()
+
+        def keep_alive() -> None:
+            while not stop.wait(15.0):
+                try:
+                    self._touch()
+                except Exception:  # noqa: BLE001 - the heartbeat cannot fail
+                    return
+
+        threading.Thread(target=keep_alive, name="ask-keepalive",
+                         daemon=True).start()
+        try:
+            return ask(question)
+        finally:
+            stop.set()
+
+    def _challenged(self, round_no: int, allow_resume: bool = True):
+        """Hand the app to the user; resume if they say they are done.
+
+        Every retry at a captcha makes the account look worse, so the app is
+        moved to the user's screen and the package is parked for a cooldown.
+        The task used to end there. Now the user is asked in the chat, and when
+        they answer the run continues on the same instruction -- the alternative
+        was making them retype the whole task for one slider.
         """
         package = self._driving_package or ""
+        label = self._app_label(package) if package else "这个 App"
         if package:
             self._challenge_until[package] = time.time() + CHALLENGE_COOLDOWN
             try:
@@ -2602,15 +2900,93 @@ class PhoneAgent:
                 self.device.hand_over(package)
             except Exception:  # noqa: BLE001 - the message matters more
                 pass
-        minutes = int(CHALLENGE_COOLDOWN // 60)
-        return self._result(
-            False,
-            f"「{self._app_label(package) if package else '这个 App'}」弹出了安全验证，"
-            f"我已经把它挪到你的屏幕上。请你手动完成验证（或者告诉我换一种方式查），"
-            f"{minutes} 分钟内我不会再自动操作它——反复尝试验证码只会让账号更危险。",
-            "challenge",
-            round_no,
+
+        ask = getattr(self, "ask", None)
+        if not allow_resume or ask is None:
+            minutes = int(CHALLENGE_COOLDOWN // 60)
+            return self._result(
+                False,
+                f"「{label}」弹出了安全验证，"
+                f"我已经把它挪到你的屏幕上。请你手动完成验证（或者告诉我换一种方式查），"
+                f"{minutes} 分钟内我不会再自动操作它——反复尝试验证码只会让账号更危险。",
+                "challenge",
+                round_no,
+            )
+
+        reply = self._ask_while_keeping_alive(
+            ask,
+            f"「{label}」弹出了人机验证，需要你亲自完成。\n\n"
+            f"我把它放到你的屏幕上了，验证通过后回复「好了」，我就接着做；"
+            f"不想继续就回复「算了」。",
         )
+        stop = ("算了", "取消", "不要", "停", "cancel", "stop", "no")
+        if not reply or any(word in str(reply).lower() for word in stop):
+            return self._result(
+                False,
+                f"「{label}」需要人机验证，已停下等你处理（验证完成后可以让我接着做）。",
+                "challenge",
+                round_no,
+            )
+
+        # The user says it is solved: bring the app back here and look.
+        self.steps.append(Step(round_no, "resume", label,
+                               "the user finished the verification"))
+        if package:
+            pulled = False
+            try:
+                pulled = bool(self.device.pull_back(package))
+            except Exception:  # noqa: BLE001 - falling back to a launch
+                pulled = False
+            if not pulled:
+                try:
+                    self.device.launch(package, wait=2.0)
+                except Exception:  # noqa: BLE001 - the re-read below decides
+                    pass
+            self._challenge_until.pop(package, None)
+        self.sleep(1.5)
+        try:
+            xml = self.device.dump_ui()
+        except Exception:  # noqa: BLE001
+            xml = ""
+        if CHALLENGE_RE.search(xml or ""):
+            return self._result(
+                False,
+                f"验证好像还没通过（「{label}」的页面上仍有验证）。你处理好了再让我试一次。",
+                "challenge",
+                round_no,
+            )
+        self.history.append(
+            f"{label} 的验证已经由用户完成，继续原来的任务。")
+        self.log("[agent] challenge solved by the user; resuming")
+        return None          # resume the loop
+
+    def _follow_launched(self, package: str) -> bool:
+        """The app went to the user's display: drive it there instead of asking.
+
+        ``launch()`` raises NeedsHandover when the started activity ends up on
+        display 0 -- 高德地图 does exactly that. Asking the user to "take over"
+        there is wrong: nothing needs their hands, the app is simply running
+        where the system put it. Following keeps the task going (measured: two
+        launches of 高德 were reported as failures in one take, and the traffic
+        leg of the demo never ran).
+        """
+        follow = getattr(self.device, "follow_to_user_display", None)
+        if follow is None:
+            return self._hand_over_app(package)
+        try:
+            if not follow():
+                return self._hand_over_app(package)
+        except DeviceError:
+            return self._hand_over_app(package)
+        name = self._app_label(package)
+        self.steps.append(Step(0, "follow", name,
+                               "opened on the user's display; continuing there"))
+        self.history.append(
+            f"{name} 只能在你的屏幕上运行，我就直接在那边操作，做完再收尾。")
+        self._driving_package = package
+        self._drove_app = True
+        self.log(f"[agent] {package}: following it to the user's display")
+        return True
 
     def _hand_over_app(self, package: str) -> bool:
         """An app opened on the user's screen: let them act, then take it back.
@@ -3001,6 +3377,7 @@ class PhoneAgent:
                     # our display and on the page it was; relaunching it is
                     # what re-opens 小红书's search page on the user's screen.
                     self._launch_grace = 2
+                    self._pulled_package = package
                     self.steps.append(
                         Step(round_no, "pull", self._app_label(package),
                              "moved back to the agent's display")

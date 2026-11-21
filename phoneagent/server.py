@@ -91,7 +91,10 @@ class ServerConfig:
     #: partial outcome means running long no longer risks a false "done".
     max_rounds: int = 35
     #: How long the agent waits for a reply to ask_user before giving up.
-    ask_timeout: float = 180.0
+    #: How long a question waits for the user. A captcha or a login can take
+    #: minutes on a phone; three was too short and the run ended while they were
+    #: still solving it.
+    ask_timeout: float = 600.0
     #: Where memories live; empty disables memory entirely.
     memory_path: str = ""
     #: Where token usage is appended; the app puts it next to the memories.

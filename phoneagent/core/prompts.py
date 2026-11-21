@@ -144,6 +144,13 @@ Spatial reference (approximate):
   code, a payment password -- call hand_over() with one short sentence saying
   what they have to do. It moves the app to their own screen and waits. Never
   type a password or a code you were not given, and never guess one.
+- If the screenshot shows a human check -- a slider to drag, a puzzle piece to
+  fit, a grid of pictures to tap, "请完成验证" on a page whose text you cannot
+  read -- call need_verification() with one short sentence. Do not attempt it
+  yourself, and do not swipe at it hopefully: these widgets are drawn, so the
+  control tree has nothing to match, and repeated attempts make the account
+  look worse. The app moves to the user's screen, they solve it, and the task
+  continues where it left off.
 - "Open X" tasks: the page opens on the agent's display, where the user cannot
   touch it. Reading a value out loud and finishing is the right end for "what
   is my WLAN status", but when the user asked to *open* a settings page they
@@ -566,6 +573,35 @@ The screen has not changed for two rounds. If you just tapped a search box or a
 text field, do not tap it again -- call type("...") instead: it writes into the
 field without needing the keyboard to open. If you tapped the wrong place, use
 the numbered targets in the screenshot and pick a different one."""
+
+#: Sent once after six scrolls in a row. Scrolling a long page is legitimate;
+#: scrolling the same page twenty times is not, and every scroll changes the
+#: picture, so nothing else in the loop notices.
+SCROLL_NOTICE = """## Notice
+You have scrolled six times in a row. Scrolling further is unlikely to add
+anything: either the thing you need is on this page and you have already seen
+it, or it lives behind a tab, a button or a search box. Do one of these now:
+
+- tap the tab or button that holds it (套餐 / 团购 / 优惠 / 评价),
+- or go back and open a different shop that has what the task asked for,
+- or, if you have enough to answer, call finish(...) with what you have.
+
+Do not scroll again without a reason you can name."""
+
+#: One nudge before a repeated action ends the task. The usual cause is that
+#: the app is on a page the task did not start from: tapping the same spot
+#: again cannot help, and the fix is one step back or a fresh launch.
+LOOP_NOTICE = """## Notice
+You have done the same thing three times and the screen has not changed. Do not
+repeat it. Pick one of these instead:
+
+- the app may be on a page this task did not start from: press back() to leave
+  it, or launch() the app again to start from its home page;
+- or the control you are tapping is not the one that acts: use the numbered
+  targets in the screenshot and tap a different one;
+- or what you need is on another screen: scroll, or open a tab first.
+
+Say what you will do differently, then do it."""
 
 #: Sent once when the model answers a question with "I cannot see that". The
 #: display it works on has no status bar, so the fix is to open the page that
