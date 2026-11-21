@@ -13,6 +13,40 @@ versions are the app's own — the CLI in this repository has its own history.
 
 ---
 
+## 0.4.5 — 2026-11-22
+
+`PhoneGo-0.4.5-arm64.apk` · SHA-256 `12dbe4cab5d8ac60d77ded130d2fb9bc7d1cfbee72de2d6778a554d65b5d60df`
+
+**English**
+
+- **Added**: `need_verification(reason)` — the model can hand a slider/puzzle
+  captcha to the user mid-task; the app moves to their screen, the chat asks, and
+  the run continues the same task afterwards. The built-in detector now asks too.
+- **Added**: crawling an app on the phone's own screen (托管): a switch in both
+  crawl dialogs, an offer when an app is marked ⛔, and a catalogue that says
+  "cannot start on the virtual display, crawl it on the phone" instead of
+  "cannot be crawled".
+- **Fixed**: waiting for a person no longer trips the stall watchdog (10-minute
+  wait, heartbeat kept alive); a launch that lands on the phone's screen is
+  followed rather than turned into a question; the "opened twice" cap only
+  applies while that app is on screen.
+- **Fixed**: repetition nudges before ending; blind taps and endless scrolling
+  lose their tool for a round; frames report non-black share and change, so a
+  blank display is measured rather than guessed.
+
+**中文**
+
+- **新增**：`need_verification(reason)`——模型遇到滑块/拼图验证时可以中途交给你；
+  App 移到你的屏幕、对话里问你，你回复后**继续原任务**。内置检测器也会主动问了。
+- **新增**：在手机自己的屏幕上爬取（托管）：两个爬取对话框都有开关；被标 ⛔ 的 App
+  会直接提供这条路；目录措辞改为「虚拟屏上起不来，可以在手机上爬」。
+- **修复**：等用户处理时不再被看门狗误判（等待 10 分钟 + 保活心跳）；启动落到手机屏
+  改为跟随而不是问你；"打开 2 次"的上限只在该 App 正在前台时生效。
+- **修复**：重复动作先提醒再终止；盲点按与无限滚动会临时收回工具；每帧回报非黑像素
+  占比与是否变化，黑屏从"猜"变成"测"。
+
+---
+
 ## 0.4.4 — 2026-11-21
 
 `PhoneGo-0.4.4-arm64.apk` · SHA-256 `fd639ff3694c4d895fa166fc060ff56e11ba405f8daa905534e151ed613d774b`

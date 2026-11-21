@@ -120,6 +120,15 @@ to apps, or the task was handed back to you on purpose.
 **Do** read the answer text: it names the step that failed. Re-running with a
 simpler wording often gets through.
 
+### `「X」弹出了人机验证，需要你亲自完成`
+
+**Where** mid-task, in the chat; the input row becomes "Reply to PhoneGo".
+**Means** the page is asking for a slider, a puzzle or a grid of pictures, and
+the app has moved it to your screen to let you do it.
+**Do** finish the check there and reply 「好了」 (or "done"); the task resumes from
+where it stopped. Reply 「算了」 to stop. Ten minutes of silence ends the run with
+what it had already found.
+
 ### `这个 App N 小时前弹过安全验证（第 N 次）`
 **Means** an app answered automation with a captcha, so **replay is skipped for
 that app for seven days** — it will be driven by the vision loop instead, which
