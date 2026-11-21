@@ -73,6 +73,9 @@ public final class Main {
         return out.length() == 0 ? "(none)" : out.toString();
     }
 
+    /** Checksum of the previous frame, to answer "did anything change". */
+    private static long lastChecksum = 0L;
+
     public static void main(String[] args) {
         Looper.prepareMainLooper();
         try {
@@ -395,8 +398,42 @@ public final class Main {
                     try (FileOutputStream out = new FileOutputStream(path)) {
                         bitmap.compress(Bitmap.CompressFormat.PNG, 100, out);
                     }
-                    System.out.println("FRAME " + path + " " + bitmap.getWidth()
-                            + "x" + bitmap.getHeight());
+                    // Frame statistics, so the agent can tell "the app is slow"
+                    // from "this display is drawing nothing" and "nothing has
+                    // changed since the last look". A black frame is otherwise
+                    // indistinguishable from a page that is still loading, and
+                    // the model answers a black frame by waiting -- which used
+                    // to repeat until the step budget ran out.
+                    int frameWidth = bitmap.getWidth();
+                    int frameHeight = bitmap.getHeight();
+                    long nonBlack = 0;
+                    long total = 0;
+                    int[] row = new int[frameWidth];
+                    for (int y = 0; y < frameHeight; y += Math.max(1, frameHeight / 64)) {
+                        bitmap.getPixels(row, 0, frameWidth, 0, y, frameWidth, 1);
+                        for (int x = 0; x < frameWidth; x += Math.max(1, frameWidth / 64)) {
+                            int pixel = row[x];
+                            int r = (pixel >> 16) & 0xff;
+                            int g = (pixel >> 8) & 0xff;
+                            int b = pixel & 0xff;
+                            if (r + g + b > 24) {
+                                nonBlack++;
+                            }
+                            total++;
+                        }
+                    }
+                    int percent = total == 0 ? 0 : (int) (nonBlack * 100 / total);
+                    long checksum = 0;
+                    for (int y = 0; y < frameHeight; y += Math.max(1, frameHeight / 64)) {
+                        bitmap.getPixels(row, 0, frameWidth, 0, y, frameWidth, 1);
+                        for (int x = 0; x < frameWidth; x += Math.max(1, frameWidth / 64)) {
+                            checksum = checksum * 31 + row[x];
+                        }
+                    }
+                    int changed = checksum == lastChecksum ? 0 : 1;
+                    lastChecksum = checksum;
+                    System.out.println("FRAME " + path + " " + frameWidth + "x" + frameHeight
+                            + " " + percent + " " + changed);
                 }
                 System.out.flush();
             }

@@ -96,6 +96,10 @@ class VirtualDisplayDevice(BaseDevice):
         self.name = name
         self.timeout = timeout
         self.display_id: Optional[int] = None
+        #: from the last frame: % of pixels that are not black, and whether the
+        #: picture differed from the one before it (see screenshot())
+        self.frame_non_black: int = -1
+        self.frame_changed: bool = True
         #: Drive the phone's own screen instead of a virtual one. For apps that
         #: cannot run anywhere else -- 京东 hands its launcher over to a
         #: singleTask activity that the system always places on display 0 -- the
@@ -300,6 +304,18 @@ class VirtualDisplayDevice(BaseDevice):
                     finally:
                         self._shell(f"rm -f {target}")
                     if data[:8] == b"\x89PNG\r\n\x1a\n":
+                        # The helper appends what the frame contains: the share
+                        # of non-black pixels and whether it differs from the
+                        # previous one. A black frame looks exactly like a page
+                        # that is still loading to the model, and "did it
+                        # change" is the question the stale-screen guard needs.
+                        fields = reply.split()
+                        try:
+                            self.frame_non_black = int(fields[3])
+                            self.frame_changed = fields[4] == "1"
+                        except (IndexError, ValueError):
+                            self.frame_non_black = -1
+                            self.frame_changed = True
                         break
                     last = DeviceError(f"frame is not a PNG ({data[:4]!r})")
                 except Exception as exc:  # noqa: BLE001 - AdbError is not a DeviceError
@@ -321,6 +337,14 @@ class VirtualDisplayDevice(BaseDevice):
     #: How long to wait for a tree before giving up on this read. A dump that
     #: cannot finish is worth an empty screen; it is never worth a frozen app.
     dump_timeout = 8.0
+
+    def frame_state(self) -> tuple:
+        """(non-black percent, changed since the previous frame).
+
+        ``-1`` in the first slot means the helper did not report it (an older
+        helper jar, or a hands-off screenshot, which is captured fresh).
+        """
+        return self.frame_non_black, self.frame_changed
 
     def dump_ui(self) -> str:
         """The control tree of the virtual display, as XML.
