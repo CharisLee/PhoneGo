@@ -233,5 +233,9 @@ def catalog(map_dir: str = "", refusal_path: str = "") -> list:
                              mapped=entry["package"] in mapped))
         if entry["package"] in refused:
             entry["state"] = "refused"
-            entry["reason"] = "上次爬取确认起不来（首页最终落在默认屏）"
+            # "refused" describes the virtual display, not the app: the same
+            # launcher works on the phone's own screen, so the honest wording
+            # says where it can be crawled rather than closing the door.
+            entry["reason"] = "虚拟屏上起不来（首页落在手机屏幕上）；可以在手机上爬（托管）"
+            entry["hands_off"] = True
     return apps

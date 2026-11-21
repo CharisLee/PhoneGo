@@ -79,7 +79,7 @@ final class Tr {
         put("配对 ", "Pairing ");
         put("正在与手机配对（", "Pairing with the phone (");
         put("Python 已就绪：", "Python is ready: ");
-        put("\napp_map 模块：", "\napp_map module: ");
+        put("\\napp_map 模块：", "\\napp_map module: ");
         put("已加载", "loaded");
         put("可用", "ok");
         put("Python 启动失败：", "Python failed to start: ");
@@ -98,7 +98,7 @@ final class Tr {
         put("最大深度 · 从首页最多点几下", "Max depth · taps from the home screen");
         put("重爬 ", "Re-crawl ");
         put("删除这份地图？", "Delete this map?");
-        put("\n\n只删手机上的这一份，删了就找不回来。", "\n\nOnly the copy on this phone goes, and there is no undo.");
+        put("\\n\\n只删手机上的这一份，删了就找不回来。", "\\n\\nOnly the copy on this phone goes, and there is no undo.");
         put("地图已更新", "Map updated");
         put("地图操作失败：", "Map action failed: ");
         put("没能读取地图列表：", "Could not read the map list: ");
@@ -109,7 +109,7 @@ final class Tr {
         put("重新测落点", "Re-measure landings");
         put("删除地图", "Delete map");
         put("删除「", "Delete \"");
-        put("」的地图？\n", "\"'s map?\n");
+        put("」的地图？\\n", "\"'s map?\\n");
         put("这个 App 会重新变回没有地图的状态。", "This app goes back to having no map.");
         put("取消固定", "Unpin");
         put("固定使用", "Pin");
@@ -140,14 +140,14 @@ final class Tr {
         put("试", "Try");
         put("算了", "Never mind");
         put("这个 App 爬不了", "This app cannot be crawled");
-        put("系统只会把它放回自己所在的屏幕，虚拟屏上起不来。\n\n", "The system only puts it back on its own display; it will not start on the virtual one.\n\n");
+        put("系统只会把它放回自己所在的屏幕，虚拟屏上起不来。\\n\\n", "The system only puts it back on its own display; it will not start on the virtual one.\\n\\n");
         put("换一个标着 ✅ 的 App。", "Pick an app marked ✅ instead.");
         put("开始为「", "Starting a map for \"");
         put("」建地图：最多 ", "\": up to ");
         put(" 屏、", " screens, ");
         put(" 分钟。", " minutes.");
         put("进度会一行行显示在这里，完成后可以在「地图」里看到它。", "Progress shows up here line by line; when it is done the map appears under Maps.");
-        put("\n正在爬取（点这里取消）", "\nCrawling (tap to cancel)");
+        put("\\n正在爬取（点这里取消）", "\\nCrawling (tap to cancel)");
         put("没能开始：", "Could not start: ");
         put("正在停止爬取…（已爬到的东西会保留）", "Stopping the crawl… (what it reached is kept)");
         put("这个 App", "This app");
@@ -155,7 +155,7 @@ final class Tr {
         put(" 屏", " screens");
         put("地图已保存", "Map saved");
         put("，用时 ", ", took ");
-        put("。\n已保存，可以在「地图」里查看或固定使用。", ".\nSaved — see it under Maps, or pin it for use.");
+        put("。\\n已保存，可以在「地图」里查看或固定使用。", ".\\nSaved — see it under Maps, or pin it for use.");
         put("」没能完成：", "\" did not finish: ");
         put("需要你", "Needs you");
         put("PhoneGo 等你一下", "PhoneGo needs a moment from you");
@@ -185,7 +185,7 @@ final class Tr {
         put("诊断：查看运行环境", "Diagnostics: inspect the runtime");
         put("运行环境", "Runtime");
         put("尚未启动", "not started");
-        put("\n\n心跳：", "\n\nheartbeat: ");
+        put("\\n\\n心跳：", "\\n\\nheartbeat: ");
         put("立即重连", "Reconnect now");
         put("正在检查连接…", "Checking the connection…");
         put("模型设置", "Model settings");
@@ -201,12 +201,12 @@ final class Tr {
         put("✅ 无障碍服务已就绪（启动时由 App 自动恢复）。", "✅ Accessibility service is ready (the app restores it at launch).");
         put("提示：无障碍服务未开启。没有它，PhoneGo 无法读取配对码，", "Note: the accessibility service is off. Without it PhoneGo cannot read the pairing code, ");
         put("agent 也只能用截图（无法按文字标签点击）。", "and the agent can only use screenshots (no tapping by label).");
-        put("\n长按「设置」可以直接打开无障碍设置页。", "\nLong-press Settings to open that page directly.");
+        put("\\n长按「设置」可以直接打开无障碍设置页。", "\\nLong-press Settings to open that page directly.");
         put("还没有可用的配对身份，请先配对无线调试。", "No pairing identity yet. Pair wireless debugging first.");
         put("无线调试当前是关闭的，PhoneGo 连不上自己的 adbd。", "Wireless debugging is off, so PhoneGo cannot reach its own adbd.");
-        put("\n请到「设置 → 开发者选项 → 无线调试」打开开关，再回到这里。", "\nOpen Settings → Developer options → Wireless debugging, turn it on, then come back.");
+        put("\\n请到「设置 → 开发者选项 → 无线调试」打开开关，再回到这里。", "\\nOpen Settings → Developer options → Wireless debugging, turn it on, then come back.");
         put("正在启动本地 agent（查找 adbd、建立虚拟屏）…", "Starting the local agent (finding adbd, creating the display)…");
-        put("启动本地 agent 失败：\n", "Could not start the local agent:\n");
+        put("启动本地 agent 失败：\\n", "Could not start the local agent:\\n");
         put("系统设置", "System settings");
         put("无障碍服务", "Accessibility service");
         put("电池优化（后台运行）", "Battery optimisation (background)");
@@ -214,7 +214,7 @@ final class Tr {
         put("导入备份", "Import backup");
         put("导出备份", "Export backup");
         put("会把配对身份、爬好的地图、会话记录和模型设置打成一个 zip，", "Packs the pairing identity, the maps, the chats and the model settings into one zip, ");
-        put("存到「下载」目录。\n\n", "saved to Downloads.\n\n");
+        put("存到「下载」目录。\\n\\n", "saved to Downloads.\\n\\n");
         put("文件里的 API Key 是明文（它在本机是加密的，换机后无法解密），", "The API key inside is plain text (on this phone it is encrypted and cannot be decrypted elsewhere), ");
         put("请不要直接分享给别人。", "so do not hand the file to anyone.");
         put("导出", "Export");
@@ -229,24 +229,24 @@ final class Tr {
         put("已经不受电池优化限制，后台可以常驻。", "Battery optimisation is already off for PhoneGo; it can stay in the background.");
         put("打不开电池设置，请手动到「设置 → 应用 → PhoneGo → 省电策略 → 无限制」。", "Could not open battery settings; set Settings → Apps → PhoneGo → Battery saver → Unrestricted.");
         put("提示：无线调试是关闭的，adbd 没有监听端口。", "Note: wireless debugging is off and adbd is not listening.");
-        put("\n请到「设置 → 开发者选项 → 无线调试」打开开关。", "\nOpen Settings → Developer options → Wireless debugging and turn it on.");
+        put("\\n请到「设置 → 开发者选项 → 无线调试」打开开关。", "\\nOpen Settings → Developer options → Wireless debugging and turn it on.");
         put("提示：电池优化可能会在后台杀掉 PhoneGo。", "Note: battery optimisation may kill PhoneGo in the background.");
-        put("\n长按「设置」→「电池优化」可以把它设为不限制。", "\nLong-press Settings → Battery optimisation to set it unrestricted.");
+        put("\\n长按「设置」→「电池优化」可以把它设为不限制。", "\\nLong-press Settings → Battery optimisation to set it unrestricted.");
         put("需要先开启无障碍服务", "Turn on the accessibility service first");
         put("配对码只存在于系统的配对弹窗里，而且弹窗一关配对服务就停了，", "The pairing code only exists in the system dialog, and closing it stops the pairing service, ");
-        put("所以只能由 PhoneGo 自己读取。\n\n", "so only PhoneGo itself can read it.\n\n");
+        put("所以只能由 PhoneGo 自己读取。\\n\\n", "so only PhoneGo itself can read it.\\n\\n");
         put("请到「设置 → 无障碍」开启 PhoneGo，再回来配对。", "Open Settings → Accessibility, enable PhoneGo, then pair again.");
         put("打开无障碍设置", "Open accessibility settings");
         put("请打开 设置 → 开发者选项 → 无线调试 → 使用配对码配对设备。", "Turn on Settings → Developer options → Wireless debugging → Pair device with pairing code.");
-        put("\n配对码由 PhoneGo 自己读取，不用手输；弹出后两分钟内完成。", "\nPhoneGo reads the code itself; you do not type it. Finish within two minutes of the dialog appearing.");
-        put("启动配对失败：\n", "Could not start pairing:\n");
+        put("\\n配对码由 PhoneGo 自己读取，不用手输；弹出后两分钟内完成。", "\\nPhoneGo reads the code itself; you do not type it. Finish within two minutes of the dialog appearing.");
+        put("启动配对失败：\\n", "Could not start pairing:\\n");
         put("等待本地 agent 就绪…", "Waiting for the local agent…");
-        put("任务没能提交：还没有配置模型密钥，点「设置」填入 API Key。\n", "The task was not submitted: no model key yet. Open Settings and paste one.\n");
-        put("本地 agent 没有起来：\n", "The local agent did not start:\n");
+        put("任务没能提交：还没有配置模型密钥，点「设置」填入 API Key。\\n", "The task was not submitted: no model key yet. Open Settings and paste one.\\n");
+        put("本地 agent 没有起来：\\n", "The local agent did not start:\\n");
         put("agent 还在启动，请稍等十几秒再试。", "The agent is still starting; give it ten seconds and try again.");
         put("PhoneGo 的后台进程卡住了（", "PhoneGo's background process is stuck (");
         put(" 秒没有心跳）。", " s without a heartbeat).");
-        put("\n请从最近任务里划掉它，再重新打开一次。", "\nSwipe it away from Recents and open it again.");
+        put("\\n请从最近任务里划掉它，再重新打开一次。", "\\nSwipe it away from Recents and open it again.");
         put("连接正常，不需要重连。", "The connection is fine; nothing to reconnect.");
         put("已重连，可以继续使用。", "Reconnected — carry on.");
         put("已自动重连，可以继续使用。", "Reconnected automatically — carry on.");
@@ -343,6 +343,14 @@ final class Tr {
         put("虚拟屏 · 第 %1$d 步", "Agent's screen · step %1$d");
         put("花钱时不再问我（自动下单/支付）", "Never ask me about money (auto-pay / auto-order)");
         put("打开后，涉及支付、下单、提交订单的步骤会直接执行，不再询问。", "With this on, paying, ordering and submitting run without asking again.");
+        put("在这台手机的屏幕上爬（会占用手机）", "Crawl on this phone's screen (takes the phone over)");
+        put("虚拟屏上起不来", "It cannot start on the virtual display");
+        put(" 的首页会把自己放到手机的屏幕上，", "'s home activity puts itself on the phone's screen, ");
+        put("可以不换 App：在手机自己的屏幕上爬一次", "You do not have to pick another app: crawl it on the phone's own screen once ");
+        put("（爬取期间手机会被自动操作，别碰屏幕）。", "(the phone is driven automatically while it runs — do not touch the screen).");
+        put("在手机上爬", "Crawl on the phone");
+        put("✅ 可以爬　📌 已有地图　⚠️ 可能起不来（可试）　⛔ 虚拟屏上起不来（可在手机上爬）\n爬取默认在虚拟屏上进行，手机可以正常使用；勾选下面的选项则在手机自己的屏幕上爬。", "✅ crawlable  📌 has a map  ⚠️ may not start (try it)  ⛔ cannot start on the virtual display (crawl it on the phone)\nCrawls run on the virtual display by default; tick the box below to use this phone's screen instead.");
+        put("」的验证已完成，接着做", "\"'s verification is done; carrying on");
     }
 
     /** Translate every TextView under {@code root} that has a mapping. */

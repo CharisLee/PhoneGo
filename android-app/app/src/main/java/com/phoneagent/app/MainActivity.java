@@ -526,13 +526,23 @@ public class MainActivity extends Activity {
         depth.setInputType(InputType.TYPE_CLASS_NUMBER);
         box.addView(depth);
 
+        // Some apps (京东, 淘宝) never come up on the virtual display: their
+        // launcher hands over to a singleTask activity the system hosts on the
+        // default one. The crawl can run there instead -- the server has taken
+        // a display flag since it was written, but nothing in the UI passed it,
+        // so that path was unreachable.
+        android.widget.CheckBox handsOff = new android.widget.CheckBox(this);
+        handsOff.setText(Tr.t("在这台手机的屏幕上爬（会占用手机）"));
+        box.addView(handsOff);
+
         new AlertDialog.Builder(this)
                 .setTitle(Tr.t("重爬 ") + label)
                 .setView(box)
                 .setPositiveButton(Tr.t("开始"), (d, w) -> startCrawl(pkg, label,
                         parseCount(screens.getText().toString(), 12),
                         parseCount(minutes.getText().toString(), 20),
-                        parseCount(depth.getText().toString(), 3)))
+                        parseCount(depth.getText().toString(), 3),
+                        handsOff.isChecked()))
                 .setNegativeButton(Tr.t("取消"), null)
                 .show();
     }
@@ -995,6 +1005,14 @@ public class MainActivity extends Activity {
         depth.setInputType(InputType.TYPE_CLASS_NUMBER);
         box.addView(depth);
 
+        // Some apps never come up on the virtual display (their launcher hands
+        // over to a singleTask activity the system hosts on the default one).
+        // The crawl can run on the phone's own screen instead; the server has
+        // taken that flag since it was written, but nothing in the UI passed it.
+        android.widget.CheckBox handsOff = new android.widget.CheckBox(this);
+        handsOff.setText(Tr.t("在这台手机的屏幕上爬（会占用手机）"));
+        box.addView(handsOff);
+
         new AlertDialog.Builder(this)
                 .setTitle(Tr.t("构建地图"))
                 .setView(box)
@@ -1012,19 +1030,32 @@ public class MainActivity extends Activity {
                                     int maxMinutes = parseCount(minutes.getText().toString(), 20);
                                     int maxDepth = parseCount(depth.getText().toString(), 3);
                                     startCrawl(packages.get(index), names.get(index),
-                                            maxScreens, maxMinutes, maxDepth);
+                                            maxScreens, maxMinutes, maxDepth,
+                                            handsOff.isChecked());
                                 })
                                 .setNegativeButton(Tr.t("算了"), null)
                                 .show();
                         return;
                     }
                     if ("refused".equals(states.get(index))) {
+                        String label = names.get(index);
+                        // Not "cannot be crawled": it cannot be crawled on the
+                        // virtual display. On the phone's own screen the same
+                        // app starts normally, so offer that instead of a dead
+                        // end.
                         new AlertDialog.Builder(this)
-                                .setTitle(Tr.t("这个 App 爬不了"))
-                                .setMessage(names.get(index) + Tr.t(" 的首页声明为 singleTask，")
-                                        + Tr.t("系统只会把它放回自己所在的屏幕，虚拟屏上起不来。\n\n")
-                                        + Tr.t("换一个标着 ✅ 的 App。"))
-                                .setPositiveButton(Tr.t("知道了"), null)
+                                .setTitle(Tr.t("虚拟屏上起不来"))
+                                .setMessage(label + Tr.t(" 的首页会把自己放到手机的屏幕上，")
+                                        + Tr.t("虚拟屏上起不来。\n\n")
+                                        + Tr.t("可以不换 App：在手机自己的屏幕上爬一次")
+                                        + Tr.t("（爬取期间手机会被自动操作，别碰屏幕）。"))
+                                .setPositiveButton(Tr.t("在手机上爬"), (d2, w2) -> {
+                                    int ms = parseCount(screens.getText().toString(), 12);
+                                    int mm = parseCount(minutes.getText().toString(), 20);
+                                    startCrawl(packages.get(index), label, ms, mm,
+                                            parseCount(depth.getText().toString(), 3), true);
+                                })
+                                .setNegativeButton(Tr.t("算了"), null)
                                 .show();
                         return;
                     }
@@ -1058,11 +1089,16 @@ public class MainActivity extends Activity {
     }
 
     private void startCrawl(String pkg, String name, int maxScreens, int maxMinutes) {
-        startCrawl(pkg, name, maxScreens, maxMinutes, 3);
+        startCrawl(pkg, name, maxScreens, maxMinutes, 3, false);
     }
 
     private void startCrawl(String pkg, String name, int maxScreens, int maxMinutes,
                             int maxDepth) {
+        startCrawl(pkg, name, maxScreens, maxMinutes, maxDepth, false);
+    }
+
+    private void startCrawl(String pkg, String name, int maxScreens, int maxMinutes,
+                            int maxDepth, boolean handsOff) {
         crawlName = name;
         append(Tr.t("构建地图"), Tr.t("开始为「") + name + Tr.t("」建地图：最多 ") + maxScreens
                 + Tr.t(" 屏、") + maxMinutes + Tr.t(" 分钟。"));
@@ -1080,6 +1116,11 @@ public class MainActivity extends Activity {
                 body.put("max_screens", maxScreens);
                 body.put("max_minutes", maxMinutes);
                 body.put("max_depth", maxDepth);
+                if (handsOff) {
+                    // 0 is the phone's own display; the server reads this as
+                    // hands-off and gives the crawl the user-display device.
+                    body.put("display", 0);
+                }
                 try (OutputStream out = conn.getOutputStream()) {
                     out.write(body.toString().getBytes(StandardCharsets.UTF_8));
                 }
@@ -3563,6 +3604,11 @@ public class MainActivity extends Activity {
         if ("type".equals(kind)) {
             // the search-query step the macro layer types by itself
             return what.isEmpty() ? Tr.t("输入文字") : Tr.t("输入「") + what + "」";
+        }
+        if ("resume".equals(kind)) {
+            // the user solved a captcha and the run continued
+            String app = what.isEmpty() ? Tr.t("目标 App") : what;
+            return "「" + app + Tr.t("」的验证已完成，接着做");
         }
         if ("pull".equals(kind)) {
             // the detail is "moved back to the agent's display": what happened,

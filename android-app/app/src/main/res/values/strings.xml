@@ -36,7 +36,7 @@
     <string name="dot_hollow" translatable="false">○</string>
     <string name="subtitle_with_arrow">%1$s  ▾</string>
     <string name="crawl_about">%1$s（%2$s）\n新地图会写到 %1$s.yaml，爬完不会自动顶掉正在用的那份——到时候列表里点「固定使用这份」。</string>
-    <string name="crawl_hint">✅ 可以爬　📌 已有地图　⚠️ 可能起不来（可试）　⛔ 试过，起不来\n爬取在虚拟屏上进行，手机可以正常使用。</string>
+    <string name="crawl_hint">✅ 可以爬　📌 已有地图　⚠️ 可能起不来（可试）　⛔ 虚拟屏上起不来（可在手机上爬）\n爬取默认在虚拟屏上进行，手机可以正常使用；勾选下面的选项则在手机自己的屏幕上爬。</string>
     <string name="viewer_hint">双指缩放 · 双击放大 · 拖动平移</string>
     <string name="crawl_screens">50</string>
     <string name="crawl_minutes">30</string>
