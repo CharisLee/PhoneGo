@@ -9,6 +9,7 @@
 <p>
   <a href="https://github.com/HKUDS/PhoneGo/releases/download/phonego-v0.4.5/PhoneGo-0.4.5-arm64.apk"><img src="https://img.shields.io/badge/%E2%AC%87%20%E4%B8%8B%E8%BD%BD-PhoneGo%200.4.5%20%C2%B7%20Android-00d9ff?style=for-the-badge&logo=android&logoColor=white&labelColor=0b0f19" height="34" alt="下载 PhoneGo 0.4.5（Android）"></a>
   <a href="#-怎么用"><img src="https://img.shields.io/badge/%F0%9F%93%96%20%E5%AE%89%E8%A3%85%E6%8C%87%E5%8D%97-4ecdc4?style=for-the-badge&logoColor=white&labelColor=1a1a2e" height="34" alt="先看安装指南"></a>
+  <a href="https://github.com/HKUDS/PhoneGo/releases"><img src="https://img.shields.io/github/downloads/HKUDS/PhoneGo/total?style=for-the-badge&logo=github&logoColor=white&labelColor=1a1a2e&color=00d9ff&label=%E4%B8%8B%E8%BD%BD" height="34" alt="PhoneGo APK 累计下载次数"></a>
 </p>
 <p>
   <a href="./Communication.md"><img src="https://img.shields.io/badge/💬飞书-群-07c160?style=for-the-badge&logoColor=white&labelColor=1a1a2e" height="22"></a>
