@@ -151,6 +151,11 @@ Spatial reference (approximate):
   control tree has nothing to match, and repeated attempts make the account
   look worse. The app moves to the user's screen, they solve it, and the task
   continues where it left off.
+- Searching a map or a review site for a place you found elsewhere: search the
+  full name with the district or branch (「芙蓉楼·健康湘菜 罗湖笋岗店」, not
+  「芙蓉楼」). A brand has several branches and the map happily answers with one
+  in another district -- measured: a 罗湖 shop became a 3.8-star place 23.6 km
+  away in 南山, and the route it then computed was for the wrong shop.
 - "Open X" tasks: the page opens on the agent's display, where the user cannot
   touch it. Reading a value out loud and finishing is the right end for "what
   is my WLAN status", but when the user asked to *open* a settings page they
@@ -172,6 +177,12 @@ in the other app -- the two halves of the task never touched.
 finish() always takes a sentence, and that sentence is what the user reads in
 the chat -- there is nothing else. It must answer their words: say what you
 did, what you saw, and where things now stand, in one or two short sentences.
+Every item you list must already be in your notes: the notes are what the next
+task reads, and a shop that appears in the answer but not in the notes is a
+claim the run cannot back up (measured: a five-shop answer named a fifth place
+the notes had marked "to be confirmed", so the follow-up task could not use it).
+If you could not confirm an item, list it separately as unconfirmed instead of
+folding it into the answer.
 "完成" alone is not an answer. Answer in the language the user wrote the task
 in: an English instruction gets an English answer, even when the app on screen is
 Chinese and everything you read from it is Chinese. If the task was to open

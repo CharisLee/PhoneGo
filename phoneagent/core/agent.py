@@ -182,6 +182,17 @@ def action_tools(with_labels: bool = True, with_maps: bool = True,
          "account gets flagged.",
          {"reason": _str("what the user has to do, one short sentence")},
          ("reason",)),
+        ("note",
+         "Write something down for later: what you found, what you tried, a "
+         "number you will need again. It survives the run, so a resumed task or "
+         "the next one can read it. Use it for anything the answer depends on.",
+         {"title": _str("a few words naming this note"),
+          "text": _str("the content: facts, numbers, names, URLs")},
+         ("title", "text")),
+        ("notes",
+         "Read back what has been written down in this workspace.",
+         {"limit": _num("how many characters from the end, 0 for everything")},
+         ()),
         ("ask_user",
          "Ask the user a question and wait for the reply. Use it when the task "
          "needs a choice, a value that is not on screen (a password, an address, "
@@ -366,6 +377,11 @@ class AgentConfig:
     #: Where the record of apps that asked for a captcha lives. Empty means the
     #: agent does not remember them.
     risk_path: str = ""
+    #: Directory for the run checkpoint (phoneagent/runs.py). Empty disables it.
+    run_dir: str = ""
+    #: Directory for the task's notes (phoneagent/workspace.py). Empty disables
+    #: the note()/notes() tools -- a device without storage has no artefacts.
+    workspace_dir: str = ""
     verify_with_vlm: bool = True
     min_screen_confidence: float = 0.5
     loop_threshold: int = 3
@@ -377,6 +393,12 @@ class AgentConfig:
     max_route_candidates: int = 30
     max_catalog_chars: int = 0  # 0 = no truncation
     history_window: int = 5
+    #: Steps after which the older history is folded into a summary. Without
+    #: this the prompt only ever saw five steps and everything before them was
+    #: gone -- on a 50-step task the model forgot the shop it had already found.
+    compact_every: int = 12
+    #: How much of the folded summary rides along in the prompt.
+    compact_chars: int = 1600
     macro_retries: int = 1  # re-run a macro once when it lands on the wrong screen
     #: The instruction asked to be left on that screen ("停在小红书"). Then the
     #: app stays where it is at the end instead of going back to our display.
@@ -607,7 +629,8 @@ class PhoneAgent:
             round_no,
         )
 
-    def run(self, task: str, context: str = "") -> TaskResult:
+    def run(self, task: str, context: str = "",
+            resume_state: Optional[dict] = None) -> TaskResult:
         """Run one task. ``context`` is what earlier subtasks found.
 
         A subtask used to receive only its own sentence ("use the hotel name
@@ -620,6 +643,27 @@ class PhoneAgent:
         self._stalled = False
         self._stall_seconds = 0
         self._watchdog_stop = False
+        self._run_started = time.time()
+        self._findings: list = []
+        self._task_text = task
+        self._compact = ""
+        self._compacted_upto = 0
+        self._resume_state = dict(resume_state or {})
+        # What earlier runs left behind. Small enough to always carry, and the
+        # whole file stays readable with notes() when the model needs more.
+        try:
+            from .. import workspace as ws_mod
+
+            earlier = ws_mod.tail(getattr(self.config, "workspace_dir", ""))
+        except Exception:  # noqa: BLE001 - a missing workspace is not an error
+            earlier = ""
+        if earlier:
+            self._carry = (self._carry + "\n\n" + "这个工作区里已经记下的内容：\n"
+                           + earlier).strip()
+        self._last_digest = ""
+        self._last_action_name = ""
+        self._stale_settled = False
+        self._save_checkpoint(task, "running", 0)
         self._start_watchdog()
         self.history = []
         self.actions = []
@@ -642,8 +686,14 @@ class PhoneAgent:
 
         try:
             result = self._run_layers(task)
-            self._end_of_task_display()
+            # Check the answer while the page it answers from is still in front:
+            # the screen is one of the two sources, and restoring the display
+            # first made every claim about that page look unconfirmed
+            # ("「省电与电池」未能在页面上再次确认" for a page it had just opened).
             self._watchdog_stop = True
+            if result.ok:
+                result.answer = self._self_check(result.answer)
+            self._end_of_task_display()
             result.answer = self._matches_task_language(task, result.answer)
             return result
         except _Stranded as exc:
@@ -1175,9 +1225,29 @@ class PhoneAgent:
         return _parse_plan(reply, self.config.max_subtasks)
 
     def _execute_plan(self, task: str) -> Optional[TaskResult]:
-        steps = self._plan(task)
+        from .. import plan as plan_mod
+
+        directory = getattr(self.config, "run_dir", "")
+        # A resumed task reuses the plan it was already following: the finished
+        # subtasks are skipped and their findings become the next one's carry,
+        # instead of replanning and paying for every screen a second time.
+        resumed = {}
+        previous = plan_mod.load(directory)
+        if previous and str(previous.get("task", "")).strip() == task.strip():
+            if plan_mod.resume_point(previous) >= 0:
+                resumed = previous
+        steps = [{"subtask": item.get("goal", ""), "app": item.get("app", "")}
+                 for item in (resumed.get("subtasks") or [])] or self._plan(task)
         if len(steps) < 2:
             return None
+        if not resumed:
+            saved = plan_mod.save(directory, task, steps)
+            if saved:
+                self.log(f"[agent] plan saved: {plan_mod.summary(saved)}")
+        else:
+            self.log(f"[agent] resuming the saved plan: {plan_mod.summary(resumed)}")
+            self.steps.append(Step(0, "plan", task,
+                                   "上次的计划，接着做：" + plan_mod.summary(resumed)))
 
         self.steps.append(
             Step(0, "plan", task, "; ".join(s.get("subtask", "") for s in steps))
@@ -1191,6 +1261,18 @@ class PhoneAgent:
             app = str(step.get("app", "")).strip()
             if not subtask:
                 continue
+            if resumed:
+                items = resumed.get("subtasks") or []
+                entry = items[index - 1] if index - 1 < len(items) else {}
+                status = entry.get("status")
+                if status == plan_mod.DONE:
+                    # Already finished before the interruption: take its result
+                    # as carry and do not run it again.
+                    answers.append(str(entry.get("result") or ""))
+                    done_names.append(app or subtask[:20])
+                    self.steps.append(Step(index, "plan", app or subtask[:20],
+                                           "已完成，跳过"))
+                    continue
             maps = [m for m in self.maps if m.app_name == app] or self.maps
             sub = PhoneAgent(
                 self.device,
@@ -1249,6 +1331,9 @@ class PhoneAgent:
             # of asking the user for something the planner already collected.
             carry = "；".join(a.strip() for a in answers if a.strip())[-600:]
             result = sub.run(subtask, context=carry)
+            plan_mod.mark(directory, index - 1,
+                          plan_mod.DONE if result.ok else plan_mod.FAILED,
+                          result.answer or "")
             detail = f"{'ok' if result.ok else 'failed'}: {subtask[:56]}"
             if not result.ok and result.reason:
                 # Without this the chat said "failed" and nothing else: three
@@ -1522,6 +1607,7 @@ class PhoneAgent:
                     round_no,
                 )
             if self.cancelled():
+                self._save_checkpoint(self._task_text, "running", round_no)
                 return self._result(False, "", "cancelled", round_no)
             if getattr(self, "_stalled", False):
                 return self._stall_result(round_no)
@@ -1628,6 +1714,27 @@ class PhoneAgent:
             digest = hashlib.sha1(
                 signature_text.encode("utf-8", "replace")
             ).hexdigest()
+            self._last_digest = digest
+            self._last_action_name = last_action
+            # Step-level resume: the first round after a restart looks at the
+            # screen it was interrupted on and says whether it is still there.
+            if self._resume_state:
+                previous = str(self._resume_state.get("screen_sig") or "")
+                package = str(self._resume_state.get("package") or "")
+                same = bool(previous) and previous == digest
+                label = self._app_label(package) if package else "上次那个 App"
+                if same:
+                    self.history.append(
+                        f"接着上次继续：{label} 的页面和中断时一样，"
+                        f"上一步是 {self._resume_state.get('last_action') or '（未知）'}。"
+                        f"不要从头再问一遍，直接做下一步。")
+                    self.log("[agent] resumed on the same screen")
+                else:
+                    self.history.append(
+                        f"上次停在 {label}，但现在的页面已经不一样了（可能被挪动或重开过）。"
+                        f"先看清眼前这一页，再决定下一步。")
+                    self.log("[agent] resumed on a different screen")
+                self._resume_state = {}
             unchanged = digest == signature
             # An unreadable tree (a canvas, a WebView with nothing to read) makes
             # every round look identical even while the screen is moving. The
@@ -1690,13 +1797,23 @@ class PhoneAgent:
             # Nothing changed since the last round: the model is acting but the
             # screen is not moving. Two taps on the same label look exactly like
             # this, so stop and report rather than burn the budget.
-            if unchanged:
+            if unchanged and round_no <= 3:
+                # The first rounds of a task are orientation: the app a previous
+                # task left open is already on the right page, so tapping it
+                # changes nothing -- and three such taps ended a repeat run
+                # before it had looked at the screen once.
+                stale_rounds = 0
+            elif unchanged:
                 # A deliberate wait does not change the screen, and neither does
                 # reading a page: neither is evidence of being stuck. But a run
                 # of waits with nothing arriving *is* stuck: a black frame after
                 # a display move reads to the model as "loading", and it waited
                 # fourteen times in a row against an empty screen (measured on
                 # 大众点评 after a pull) until the budget ran out.
+                if last_action in self.READ_ONLY_TOOLS:
+                    # Reading, writing a note, asking: the model is working, it
+                    # is just not touching the screen. Not a stuck run.
+                    stale_rounds = 0
                 if last_action == "wait":
                     waits_in_a_row += 1
                 else:
@@ -1710,6 +1827,22 @@ class PhoneAgent:
             else:
                 stale_rounds = 0
                 signature = digest
+            # Before calling a still screen "stuck", give the app a moment: a
+            # page that is loading looks exactly like a page that ignores you,
+            # and the first version ended a take on the third unchanged round
+            # while 大众点评 was still painting. One settle per task.
+            if unchanged and stale_rounds >= 2 and not getattr(self, "_stale_settled", False):
+                self._stale_settled = True
+                time.sleep(1.2)
+                try:
+                    again = self.device.dump_ui()
+                    if hashlib.sha1((self._screen_signature(again) or "")
+                                    .encode("utf-8", "replace")).hexdigest() != digest:
+                        unchanged = False
+                        stale_rounds = 0
+                        self.log("[agent] the screen moved after a settle; not stale")
+                except Exception:  # noqa: BLE001 - keep the original verdict
+                    pass
             if (stale_rounds >= self.config.no_new_data_limit
                     and not stale_nudged):
                 # One last hint before the run dies: a tap on an already
@@ -1913,6 +2046,11 @@ class PhoneAgent:
                     if getattr(self, "_last_escape", "") == "pull":
                         pending_notice = PULL_NOTICE
             last_action = name
+            self._compact_history()
+            # Written here, not at the top of the round: the point of a
+            # step-level resume is the screen as it was *after* the last action,
+            # plus the action itself. One small JSON per round (~3 s apart).
+            self._save_checkpoint(self._task_text, "running", round_no)
             if name in self.READ_ONLY_TOOLS:
                 repeats[name] = repeats.get(name, 0) + 1
                 if repeats[name] in (2, 3):
@@ -2232,6 +2370,10 @@ class PhoneAgent:
             parts.append('')
         if notice:
             parts.append(notice)
+            parts.append("")
+        if getattr(self, "_compact", ""):
+            parts.append("## Earlier steps (summarised)")
+            parts.append(self._compact)
             parts.append("")
         if self.history:
             recent = self.history[-self.config.history_window:]
@@ -2629,6 +2771,41 @@ class PhoneAgent:
                     return False
                 return self._tap_text(label)
 
+            if name == "note":
+                directory = getattr(self.config, "workspace_dir", "")
+                if not directory:
+                    self.history.append("note: nowhere to write on this device")
+                    return False
+                title = str(args[0]) if args else "note"
+                body = str(args[1]) if len(args) > 1 else ""
+                if not body.strip():
+                    return False
+                from .. import workspace as ws_mod
+
+                if not ws_mod.append(directory, title, body):
+                    return False
+                self.history.append(f"note saved: {title}")
+                self.steps.append(Step(getattr(self, "_round_no", 0), "note",
+                                       title[:40], body[:60]))
+                self.log(f"[agent] note: {title[:40]}")
+                return True
+
+            if name == "notes":
+                directory = getattr(self.config, "workspace_dir", "")
+                if not directory:
+                    return False
+                from .. import workspace as ws_mod
+
+                try:
+                    limit = int(float(args[0])) if args else 0
+                except (TypeError, ValueError):
+                    limit = 0
+                text = ws_mod.read(directory, limit=limit)
+                self.history.append(
+                    "notes from this workspace:\n" + (text.strip() or "(empty)")
+                )
+                return True
+
             if name == "need_verification":
                 # The control tree often has no text for a WebView/canvas
                 # captcha, so CHALLENGE_RE cannot see it. The model can see it
@@ -2854,6 +3031,144 @@ class PhoneAgent:
         cache[package] = mode
         return mode
 
+    def _compact_history(self) -> None:
+        """Fold the older half of the history into a summary.
+
+        The prompt only ever showed ``history_window`` steps, so a fifty-step
+        task forgot the shop it found at step ten. The fold is deterministic on
+        purpose: a model-written summary costs a call per fold and can drop the
+        one number that mattered. What survives is every line that carries an
+        outcome -- launches, typed text, taps on named controls, notes, errors --
+        with the chatter and repeats dropped.
+        """
+        window = max(1, int(self.config.history_window))
+        every = max(2, int(self.config.compact_every))
+        folded_to = getattr(self, "_compacted_upto", 0)
+        if len(self.history) - folded_to < window + every:
+            return
+        stop = len(self.history) - window
+        block = self.history[folded_to:stop]
+        if not block:
+            return
+        keep = []
+        seen: set = set()
+        for line in block:
+            text = str(line).strip().replace("\n", " ")
+            if not text:
+                continue
+            if len(text) > 160:
+                text = text[:157] + "..."
+            if text in seen:
+                continue
+            # Errors and decisions matter; "no change" rounds do not.
+            if text.lower().startswith(("vlm error", "loop", "no progress")):
+                continue
+            seen.add(text)
+            keep.append(text)
+        if keep:
+            # The first lines of a block hold what the task discovered; the last
+            # ones hold where it is now. A tail-only cap throws the first away
+            # before the summary ever sees them.
+            if len(keep) > 24:
+                keep = keep[:8] + keep[-16:]
+            joined = "\n".join(f"- {line}" for line in keep)
+            summary = (getattr(self, "_compact", "") + "\n" + joined).strip()
+            limit = max(400, int(self.config.compact_chars))
+            if len(summary) > limit:
+                # Keep both ends: the first facts of a task (the shop, the
+                # price) matter as much as what just happened. A tail-only trim
+                # lost exactly those.
+                head = limit * 2 // 5
+                tail = limit - head - 3
+                summary = summary[:head] + "\n…\n" + summary[-tail:]
+            self._compact = summary
+            self.log(f"[agent] compacted {len(block)} steps "
+                     f"(summary {len(summary)} chars)")
+        self._compacted_upto = stop
+
+    def _self_check(self, answer: str) -> str:
+        """Check the answer's numbers against the notes and the screen.
+
+        Narrow on purpose (see phoneagent/claims.py): names in 「」, prices and
+        ratings, looked for in what this run wrote down and in what is on the
+        screen at the end. A claim found nowhere is not deleted -- it is named
+        in the answer, which is the honest thing to do with a figure the phone
+        cannot back up any more.
+        """
+        if getattr(self, "_depth", 0) > 0:
+            return answer
+        try:
+            from .. import claims as claims_mod
+            from .. import workspace as ws_mod
+
+            sources = []
+            notes = ws_mod.read(getattr(self.config, "workspace_dir", ""))
+            if notes:
+                sources.append(notes)
+            try:
+                xml = self.device.dump_ui()
+                # _ui_texts() returns (label, x, y) tuples, and the earlier
+                # version joined them as strings -- which raised, was swallowed,
+                # and left the screen out of the check entirely. Take the labels,
+                # plus every text attribute as a fallback: a page title is a
+                # plain TextView that the tap-target list may skip.
+                labels = [t[0] if isinstance(t, (tuple, list)) else str(t)
+                          for t in (self._ui_texts(xml) or [])]
+                sources.append(" ".join(labels))
+                sources.append(" ".join(re.findall(
+                    r'(?:text|content-desc)="([^"]+)"', xml)))
+            except Exception:  # noqa: BLE001 - the screen is optional
+                pass
+            if not sources:
+                return answer
+            checked, missing = claims_mod.verify(
+                answer, sources, given=getattr(self, "_task_text", ""))
+        except Exception as exc:  # noqa: BLE001 - a check must never fail a task
+            self.log(f"[agent] self-check skipped: {exc}")
+            return answer
+        if not checked and not missing:
+            return answer
+        self.steps.append(Step(getattr(self, "_round_no", 0), "verify", "答案核对",
+                               f"{len(checked)} 项命中 / {len(missing)} 项未确认"))
+        self.log(f"[agent] answer check: {len(checked)} confirmed, "
+                 f"{len(missing)} unconfirmed")
+        if missing:
+            shown = "、".join(missing[:3])
+            answer = (answer.rstrip()
+                      + f"\n\n（「{shown}」未能在页面上再次确认，以页面为准。）")
+        return answer
+
+    def _save_checkpoint(self, task: str, status: str, rounds: int,
+                         question: str = "", answer: str = "") -> None:
+        """Write where this run has got to, so a restart can offer to continue."""
+        if getattr(self, "_depth", 0) > 0:
+            # A subtask runs with the same config; letting it write here meant
+            # the checkpoint described "搜索步骤1找到的火锅店名称" instead of the
+            # task the user asked for, and 继续 resumed that sentence.
+            return
+        directory = getattr(self.config, "run_dir", "")
+        if not directory:
+            return
+        try:
+            from .. import runs as runs_mod
+
+            runs_mod.save(directory, runs_mod.checkpoint(
+                task=task,
+                status=status,
+                rounds=rounds,
+                findings=getattr(self, "_findings", ()),
+                steps=[f"{s.round} {s.kind} {s.action} {s.detail}" for s in self.steps],
+                carry=getattr(self, "_carry", ""),
+                question=question,
+                answer=answer,
+                started=getattr(self, "_run_started", 0.0),
+                package=getattr(self, "_driving_package", ""),
+                screen_sig=getattr(self, "_last_digest", ""),
+                last_action=getattr(self, "_last_action_name", ""),
+            ))
+        except Exception:  # noqa: BLE001 - a checkpoint must never fail a task
+            pass
+
     def _ask_while_keeping_alive(self, ask, question: str):
         """Ask the user, touching the heartbeat while they take their time.
 
@@ -2913,6 +3228,9 @@ class PhoneAgent:
                 round_no,
             )
 
+        self._save_checkpoint(self._task_text, "waiting",
+                              getattr(self, "_round_no", 0),
+                              question=f"「{label}」需要人机验证")
         reply = self._ask_while_keeping_alive(
             ask,
             f"「{label}」弹出了人机验证，需要你亲自完成。\n\n"
@@ -3549,6 +3867,26 @@ class PhoneAgent:
         """
         if not label:
             return False
+        # A model that means "the first numbered mark" sometimes calls
+        # tap_text(1) instead of tap_index(1) -- measured with deepseek-flash,
+        # which did exactly that three times in a row and then hit the loop
+        # guard. The intent is unambiguous when the label is a bare number that
+        # matches a mark, so honour it instead of tapping the literal "1".
+        stripped = label.strip()
+        marks = getattr(self, "_current_marks", None) or []
+        if stripped.isdigit() and marks:
+            wanted = int(stripped)
+            if any(int(m.get("i", -1)) == wanted for m in marks):
+                label_of_mark = self._mark_label(wanted)
+                # The caller confirmed the *text* "1", which says nothing about
+                # what the mark does. A numbered money button ("付款") would
+                # otherwise be tapped without the question.
+                if not self._confirm_spending(label_of_mark):
+                    return False
+                self.log(f"[agent] tap_text({stripped}) -> tap_index({wanted})")
+                point = self._tap_mark(wanted)
+                if point is not None:
+                    return bool(self.device.tap(point[0], point[1]))
         click = getattr(self.device, "tap_text", None)
         if click is not None:
             try:
@@ -3710,6 +4048,27 @@ class PhoneAgent:
         rounds: int,
         used_op: str = "",
     ) -> TaskResult:
+        # Every terminal result passes through here, so this is where the
+        # checkpoint learns the run is over -- a finished run is never offered
+        # back as "continue where you left off".
+        try:
+            if getattr(self, "_task_text", "") and ok and getattr(self, "_depth", 0) == 0:
+                from .. import workspace as ws_mod
+
+                ws_mod.save_result(getattr(self.config, "workspace_dir", ""),
+                                   self._task_text, answer)
+        except Exception:  # noqa: BLE001 - an artefact cannot fail a result
+            pass
+        try:
+            if getattr(self, "_task_text", ""):
+                self._save_checkpoint(
+                    self._task_text,
+                    "done" if ok else "failed",
+                    rounds,
+                    answer=answer,
+                )
+        except Exception:  # noqa: BLE001 - bookkeeping cannot fail a result
+            pass
         return TaskResult(
             ok=ok,
             answer=answer,
