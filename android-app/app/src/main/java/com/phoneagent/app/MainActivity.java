@@ -217,11 +217,16 @@ public class MainActivity extends Activity {
             subtitle.setOnClickListener(v -> showSessions());
             refreshSubtitle();
         }
+        CrashLog.install(this);
         restoreChat();
         // Diagnostics, not conversation: five lines about Python versions in
         // the middle of the transcript told the user nothing they could act on.
         // They live in 设置 → 诊断 now.
         bootInfo = pythonStatus();
+        String crashed = CrashLog.last(this);
+        if (!crashed.isEmpty()) {
+            note(Tr.t("上次运行崩溃了，记录在这里：\n") + crashed);
+        }
         checkAccessibility();
         checkWirelessDebugging();
         checkBattery();
@@ -229,6 +234,12 @@ public class MainActivity extends Activity {
         resumeRunningTask();
         if (hasIdentity()) {
             startAgentService();
+            // The agent needs a few seconds before it can answer; ask it about
+            // an interrupted run once it is up rather than right here.
+            handler.postDelayed(this::checkRunToResume, 25000);
+            // A start that failed on adb itself never becomes ready, so the
+            // reason has to be surfaced rather than waited out.
+            handler.postDelayed(this::checkAgentError, 12000);
         } else {
             note(Tr.t("还没有配对无线调试，先完成一次配对。"));
             startPairingWatch();
@@ -311,10 +322,67 @@ public class MainActivity extends Activity {
                 answerTask(id, text);
                 return;
             }
+            // 「继续」 alone means "pick up where the interrupted run stopped".
+            // The server decides whether there is anything to resume; a plain
+            // "continue" with no saved run is just a task it cannot do, and the
+            // note below says so instead of running it.
+            String trimmed = text.trim();
+            if ((trimmed.equals("继续") || trimmed.equalsIgnoreCase("continue"))
+                    && !lastRunTask.isEmpty()) {
+                resumeWanted = true;
+                text = lastRunTask;
+                // One shot: after this the checkpoint is either consumed or
+                // gone, and a second 「继续」 must not silently re-run an old
+                // task the user finished an hour ago.
+                lastRunTask = "";
+            }
             append(Tr.t("你"), text);
             startTask(text);
         });
     }
+
+    /**
+     * A note the user has to act on: the sentence, plus one button.
+     *
+     * The adb failures this is used for ("pairing lost", "no listener") used to
+     * end up in logcat only, and the chat just said the agent was restarting.
+     */
+    private void noteWithAction(String text, String actionLabel, Runnable action) {
+        onUi(() -> {
+            if (messages == null) {
+                return;
+            }
+            LinearLayout box = new LinearLayout(this);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(dp(16), dp(10), dp(16), dp(10));
+            LinearLayout.LayoutParams boxParams = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            boxParams.topMargin = dp(6);
+            boxParams.bottomMargin = dp(4);
+
+            TextView line = new TextView(this);
+            line.setText(text.trim());
+            line.setTextSize(12f);
+            line.setTextColor(getColor(R.color.ink_soft));
+            box.addView(line);
+
+            Button fix = new Button(this);
+            fix.setText(actionLabel);
+            fix.setAllCaps(false);
+            LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            btnParams.topMargin = dp(6);
+            box.addView(fix, btnParams);
+
+            closeStepBlock();
+            messages.addView(box, boxParams);
+            trimMessages();
+            scrollDown();
+        });
+    }
+
+    /** The instruction of the last interrupted run, for 「继续」 to reuse. */
+    private volatile String lastRunTask = "";
 
     /** Runs the agent core that ships inside the APK. */
     private String pythonStatus() {
@@ -2138,6 +2206,70 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * Did the last run stop half-way? Then say so once, with a way back.
+     *
+     * The agent keeps a checkpoint of what a task had found before it was
+     * interrupted (a service restart, a kill, a captcha that outlived the
+     * process). Without this note the user has no idea the run is resumable,
+     * and re-types an instruction the phone already half did.
+     */
+    /**
+     * Why the agent is not up, when the reason is something the user can fix.
+     *
+     * Two adb failures are worth a message of their own: the phone no longer
+     * trusts this app's pairing (a framework restart, or another tool pairing
+     * again), or wireless debugging is not listening at all. Both used to be a
+     * PyException in logcat and "正在启动本地 agent" that never finished.
+     */
+    private void checkAgentError() {
+        String reason = AgentService.lastError();
+        if (reason.isEmpty() || AgentService.isReady()) {
+            return;
+        }
+        AgentService.clearLastError();
+        if ("pairing_lost".equals(reason)) {
+            noteWithAction(
+                    Tr.t("无线调试的配对失效了（证书不被手机认可），需要重新配对一次才能继续。")
+                            + Tr.t("\n点下面的按钮，然后按提示在系统弹窗里完成配对。"),
+                    Tr.t("重新配对"),
+                    this::startPairingWatch);
+            return;
+        }
+        if ("no_listener".equals(reason)) {
+            noteWithAction(
+                    Tr.t("无线调试没有在监听（端口不可用）。")
+                            + Tr.t("\n请到「设置 → 开发者选项 → 无线调试」先关掉再打开，然后点这里重新配对。"),
+                    Tr.t("重新配对"),
+                    this::startPairingWatch);
+        }
+    }
+
+    private void checkRunToResume() {
+        new Thread(() -> {
+            try {
+                HttpURLConnection conn = connect("/run");
+                conn.setConnectTimeout(3000);
+                conn.setReadTimeout(8000);
+                JSONObject out = new JSONObject(read(conn));
+                if (!out.optBoolean("resumable")) {
+                    return;
+                }
+                String task = out.optString("task", "");
+                String summary = out.optString("summary", "");
+                if (task.isEmpty()) {
+                    return;
+                }
+                lastRunTask = task;
+                ui(() -> {
+                    note(summary + Tr.t("\n回复「继续」接着做，或直接说别的取消它。"));
+                });
+            } catch (Throwable ignored) {
+                // nothing to resume, or the agent is not up yet: not news
+            }
+        }).start();
+    }
+
     private boolean accessibilityWarned;
 
     /**
@@ -2210,6 +2342,14 @@ public class MainActivity extends Activity {
      * from Recents works, but it is the app's job first.
      */
     private void restartAgentService(String why) {
+        if (!onMainThread()) {
+            // Called from the send path or the connection test. Hopping to the
+            // main thread does two things: every view this touches is legal,
+            // and a restart cannot race the heartbeat watchdog, which lives
+            // there too.
+            handler.post(() -> restartAgentService(why));
+            return;
+        }
         long now = System.currentTimeMillis();
         if (now - lastAgentRestart < 120000) {
             return;      // tried a moment ago; do not loop
@@ -2488,6 +2628,15 @@ public class MainActivity extends Activity {
                     conn.setRequestProperty("Content-Type", "application/json");
                     JSONObject body = new JSONObject();
                     body.put("text", text);
+                    if (resumeWanted) {
+                        // 「继续」 after an interruption: the server reuses the
+                        // saved instruction and hands the agent what it found.
+                        // The flag is cleared only once the POST succeeds -- a
+                        // connection failure retries the loop, and a resume that
+                        // silently became a plain task on the second attempt is
+                        // how "继续" ended up running the request from scratch.
+                        body.put("resume", true);
+                    }
                     body.put("autonomous", autonomousMode());
                     body.put("maps", mapsMode());
                     if (handsOffMode()) {
@@ -2498,6 +2647,7 @@ public class MainActivity extends Activity {
                         out.write(body.toString().getBytes(StandardCharsets.UTF_8));
                     }
                     final String id = new JSONObject(read(conn)).getString("id");
+                    resumeWanted = false;
                     ui(() -> {
                         currentTaskId = id;
                         shownSteps = 0;
@@ -2702,6 +2852,9 @@ public class MainActivity extends Activity {
             });
         }).start();
     }
+
+    /** Set when the next send is 「继续」 for an interrupted run. */
+    private volatile boolean resumeWanted = false;
 
     /** Consecutive poll requests that did not come back; reset by a good one. */
     private int pollFailures = 0;
@@ -3412,6 +3565,11 @@ public class MainActivity extends Activity {
     }
 
     private void hideThinking() {
+        onUi(this::hideThinkingOnMain);
+    }
+
+    private void hideThinkingOnMain() {
+        assertMain("hideThinkingOnMain");
         handler.removeCallbacks(thinkingTick);
         if (thinkingRow != null && messages != null) {
             messages.removeView(thinkingRow);
@@ -3421,6 +3579,11 @@ public class MainActivity extends Activity {
     }
 
     private void setBusy(boolean busy) {
+        onUi(() -> setBusyOnMain(busy));
+    }
+
+    private void setBusyOnMain(boolean busy) {
+        assertMain("setBusyOnMain");
         if (!busy) {
             hideThinking();
         }
@@ -3457,6 +3620,47 @@ public class MainActivity extends Activity {
         handler.post(action);
     }
 
+    private boolean onMainThread() {
+        return Looper.myLooper() == Looper.getMainLooper();
+    }
+
+    /**
+     * Run UI work on the main thread, whichever thread calls it.
+     *
+     * Views are single-threaded and this activity used to keep that invariant by
+     * hand: 41 call sites remembered to wrap, the rest trusted. Two did not --
+     * a message sent while the local agent was still down reached append() from
+     * a worker thread and the process died with
+     * CalledFromWrongThreadException. The invariant belongs here, not in the
+     * 174 places that touch a view.
+     */
+    private void onUi(Runnable action) {
+        if (onMainThread()) {
+            action.run();
+            return;
+        }
+        handler.post(() -> {
+            if (isFinishing() || isDestroyed()) {
+                return;      // the window is gone; posting into it drops the work
+            }
+            action.run();
+        });
+    }
+
+    /** Debug builds stop at the first violation instead of at the user's screen. */
+    private void assertMain(String what) {
+        if (!onMainThread()) {
+            String message = what + " touched views off the main thread: "
+                    + Thread.currentThread().getName();
+            boolean debuggable = (getApplicationInfo().flags
+                    & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+            if (debuggable) {
+                throw new IllegalStateException(message);
+            }
+            android.util.Log.e("PhoneGo", message);
+        }
+    }
+
     /** System chatter: centred, small, no bubble -- it is not the agent talking. */
     /**
      * A message the user has to see, welcome screen or not.
@@ -3465,6 +3669,11 @@ public class MainActivity extends Activity {
      * reconnect is not decoration, so it gets a bubble of its own.
      */
     private void alert(String text) {
+        onUi(() -> alertOnMain(text));
+    }
+
+    private void alertOnMain(String text) {
+        assertMain("alertOnMain");
         if (welcome != null && welcome.getVisibility() == View.VISIBLE) {
             append("PhoneGo", text);
         } else {
@@ -3473,6 +3682,11 @@ public class MainActivity extends Activity {
     }
 
     private void note(String text) {
+        onUi(() -> noteOnMain(text));
+    }
+
+    private void noteOnMain(String text) {
+        assertMain("noteOnMain");
         if (welcome != null && welcome.getVisibility() == View.VISIBLE) {
             // The welcome screen is a deliberate composition; a status line
             // dropping into the middle of it looks like part of the artwork.
@@ -3505,6 +3719,11 @@ public class MainActivity extends Activity {
      * block, capped, keeps that from happening.
      */
     private void appendLines(String text) {
+        onUi(() -> appendLinesOnMain(text));
+    }
+
+    private void appendLinesOnMain(String text) {
+        assertMain("appendLinesOnMain");
         hideThinking();
         if (stepBlock == null || stepBlock.getParent() == null) {
             stepLines.clear();               // a new block starts a new list
@@ -3616,7 +3835,15 @@ public class MainActivity extends Activity {
             String app = what.isEmpty() ? Tr.t("目标 App") : what;
             return "「" + app + Tr.t("」跳到了你的屏幕上，已搬回虚拟屏");
         }
+        if ("note".equals(kind)) {
+            // the note tool: a fact the run wrote down for later
+            return what.isEmpty() ? Tr.t("记下了一条线索") : Tr.t("记下：") + cleanLabel(what);
+        }
         if ("verify".equals(kind)) {
+            if (what.contains(Tr.t("答案"))) {
+                // the end-of-run check of the answer's own numbers
+                return how.isEmpty() ? Tr.t("核对答案") : Tr.t("核对答案：") + how;
+            }
             if ("mismatch".equals(what)) {
                 return Tr.t("当前页面和地图记录的不一样，按眼前的页面继续");
             }
@@ -3813,6 +4040,11 @@ public class MainActivity extends Activity {
      * this, everything was one TextView with "PhoneAgent" printed above it.
      */
     private void append(String who, String message) {
+        onUi(() -> appendOnMain(who, message));
+    }
+
+    private void appendOnMain(String who, String message) {
+        assertMain("appendOnMain");
         boolean mine = Tr.t("你").equals(who);
         if (!mine) {
             hideThinking();

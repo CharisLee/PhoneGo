@@ -351,6 +351,17 @@ final class Tr {
         put("在手机上爬", "Crawl on the phone");
         put("✅ 可以爬　📌 已有地图　⚠️ 可能起不来（可试）　⛔ 虚拟屏上起不来（可在手机上爬）\n爬取默认在虚拟屏上进行，手机可以正常使用；勾选下面的选项则在手机自己的屏幕上爬。", "✅ crawlable  📌 has a map  ⚠️ may not start (try it)  ⛔ cannot start on the virtual display (crawl it on the phone)\nCrawls run on the virtual display by default; tick the box below to use this phone's screen instead.");
         put("」的验证已完成，接着做", "\"'s verification is done; carrying on");
+        put("\n回复「继续」接着做，或直接说别的取消它。", "\nReply 「继续」 (continue) to carry on, or say something else to drop it.");
+        put("上次运行崩溃了，记录在这里：\n", "The last run crashed; here is the record:\n");
+        put("记下了一条线索", "Wrote a note down");
+        put("记下：", "Noted: ");
+        put("核对答案", "Checking the answer");
+        put("核对答案：", "Checking the answer: ");
+        put("无线调试的配对失效了（证书不被手机认可），需要重新配对一次才能继续。", "The wireless-debugging pairing no longer works (the phone does not accept this app's certificate); pair it once more to continue.");
+        put("\n点下面的按钮，然后按提示在系统弹窗里完成配对。", "\nTap the button below, then finish the pairing in the system dialog it tells you to open.");
+        put("无线调试没有在监听（端口不可用）。", "Wireless debugging is not listening (its port is not available).");
+        put("\n请到「设置 → 开发者选项 → 无线调试」先关掉再打开，然后点这里重新配对。", "\nGo to Settings → Developer options → Wireless debugging, switch it off and on, then tap here to pair again.");
+        put("重新配对", "Pair again");
     }
 
     /** Translate every TextView under {@code root} that has a mapping. */

@@ -205,6 +205,7 @@ class AgentService : Service() {
                 Log.i("Pairing", "agent: $served")
                 if (served.startsWith("listening")) {
                     ready = true
+                    noteStarted()
                 }
 
                 val shot = File(filesDir, "frame.png").absolutePath
@@ -245,6 +246,7 @@ class AgentService : Service() {
                 )
             } catch (t: Throwable) {
                 Log.i("Pairing", "agent failed: ${t.javaClass.simpleName}: ${t.message}")
+                lastError = classify(t)
                 started = false
                 stopSelf()
             }
@@ -380,6 +382,44 @@ class AgentService : Service() {
         private var started = false
         @Volatile
         private var ready = false
+
+        /** Why the last start failed: "pairing_lost", "no_listener", or "". */
+        @Volatile
+        private var lastError: String = ""
+
+        @JvmStatic
+        fun lastError(): String = lastError
+
+        @JvmStatic
+        fun clearLastError() {
+            lastError = ""
+        }
+
+        /**
+         * Turn an adb failure into the sentence the user can act on.
+         *
+         * "SSL: CERTIFICATE_UNKNOWN" means the phone no longer trusts this
+         * app's pairing (a framework restart or another tool re-pairing), and
+         * "no listener" means wireless debugging is off or was toggled without
+         * its port coming back. The two need different instructions, and a
+         * PyException in logcat is neither.
+         */
+        private fun classify(t: Throwable): String {
+            val text = "${t.javaClass.simpleName}: ${t.message}".lowercase()
+            return when {
+                "adb_pairing_lost" in text || "certificate_unknown" in text ||
+                    "certificate unknown" in text -> "pairing_lost"
+                "adb_no_listener" in text || "connection refused" in text ||
+                    "没有监听端口" in text -> "no_listener"
+                else -> ""
+            }
+        }
+
+        /** The agent came up: any earlier failure is history. */
+        @JvmStatic
+        fun noteStarted() {
+            lastError = ""
+        }
 
         /** Has this process started the agent? The UI asks before healing it. */
         @JvmStatic
