@@ -170,8 +170,9 @@ def test_no_progress_ends_the_run_instead_of_burning_steps():
 
     assert not result.ok
     assert result.reason.startswith("no_new_data")
-    # three unchanged rounds plus the first, not twenty
-    assert result.rounds <= 5
+    # Three unchanged rounds end it, plus the three warm-up rounds that are
+    # orientation rather than evidence of being stuck -- not twenty.
+    assert result.rounds <= 8
 
 
 def test_progress_check_fires_once_at_the_halfway_point():

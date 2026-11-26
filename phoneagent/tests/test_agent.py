@@ -162,13 +162,16 @@ def test_loop_detection_aborts():
         text_responses=["NEED_VLM: complex"],
         vision_responses=["Action: tap(0.5, 0.5)"],  # repeated forever
     )
-    result = _agent(device, llm, loop_threshold=3, max_rounds=10).run("stuck task")
+    result = _agent(device, llm, loop_threshold=3, max_rounds=20).run("stuck task")
 
     assert not result.ok
     assert result.reason == "loop"
-    # three taps happened, the abort fires when the fourth round starts
-    assert result.rounds == 4
-    assert [s.action for s in result.steps].count("tap") == 3
+    # The guard nudges once first (a tap on a title bar is a loop that a hint
+    # can break), so the end comes after the second run of identical actions:
+    # rounds 1-3 tap, round 4 nudges and taps again, rounds 5-6 tap, and the
+    # next round ends it.
+    assert result.rounds == 7
+    assert [s.action for s in result.steps].count("tap") == 6
 
 
 def test_max_rounds_exhausted():
@@ -437,8 +440,10 @@ def test_a_loop_reports_what_repeated():
     from phoneagent.core.llm import MockLLM
 
     device = MockDevice()
-    llm = MockLLM(vision_responses=["launch(时钟)"] * 6)
-    agent = _agent(device, llm, macro_enabled=False, planner_enabled=False)
+    # enough repeats for a nudge plus the cycle that ends the run
+    llm = MockLLM(vision_responses=["launch(时钟)"] * 12)
+    agent = _agent(device, llm, macro_enabled=False, planner_enabled=False,
+                   max_rounds=20)
     result = agent.run("现在几点了？")
 
     assert not result.ok
