@@ -112,6 +112,10 @@ class ServerConfig:
     pins_path: str = ""
     #: Apps that answered with a captcha are driven by screen, not replayed.
     risk_path: str = ""
+    #: Directory holding the run checkpoint (see phoneagent/runs.py).
+    run_dir: str = ""
+    #: Directory for the task's notes (see phoneagent/workspace.py).
+    workspace_dir: str = ""
     #: When each app was last crawled, so one app is not hammered.
     pacing_path: str = ""
     #: Optional factory that returns a device driving the phone's own screen,
@@ -317,7 +321,8 @@ def _scan_maps(config: ServerConfig) -> list:
 
 
 def _run(task_id: str, text: str, config: ServerConfig,
-         hands_off: bool = False) -> None:
+         hands_off: bool = False, resume_note: str = "",
+         resume_state: dict | None = None) -> None:
     from . import usage as usage_mod
 
     # Everything this task spends is attributed to it, so the usage page can
@@ -470,6 +475,8 @@ def _run(task_id: str, text: str, config: ServerConfig,
                     # apps that answered us with a captcha are driven by screen
                     # from then on, not replayed
                     risk_path=config.risk_path,
+                    run_dir=config.run_dir,
+                    workspace_dir=config.workspace_dir,
                     user_display_packages=config.user_display_packages,
                     # "停在小红书" is the one instruction that overrides the
                     # end-of-task restore.
@@ -488,6 +495,16 @@ def _run(task_id: str, text: str, config: ServerConfig,
                 dumped = False
                 while not stop_watch.is_set():
                     snapshot = [_step_dict(step) for step in list(agent.steps)]
+                    with LOCK:
+                        waiting = TASKS.get(task_id, {}).get("state") == "waiting"
+                    if waiting:
+                        # A captcha hand-over is progress that does not produce
+                        # steps: the run is blocked on a person, not wedged. The
+                        # agent side already keeps its own heartbeat alive for
+                        # this; the server's counter killed the same task at four
+                        # minutes ("这一步卡住了（240 秒没有新进展）" while the
+                        # chat was still asking the user to solve the slider).
+                        progressed = time.time()
                     if len(snapshot) != seen:
                         seen = len(snapshot)
                         progressed = time.time()
@@ -519,7 +536,8 @@ def _run(task_id: str, text: str, config: ServerConfig,
             watcher = threading.Thread(target=watch, daemon=True)
             watcher.start()
             try:
-                result = agent.run(text)
+                result = agent.run(text, context=resume_note,
+                                   resume_state=resume_state)
             finally:
                 stop_watch.set()
                 watcher.join(timeout=2.0)
@@ -1131,6 +1149,30 @@ class Handler(BaseHTTPRequestHandler):
 
     def _post(self):
         parts = self.path.strip("/").split("/")
+        if parts == ["run", "clear"]:
+            from . import runs as runs_mod
+
+            config = self.server.config  # type: ignore[attr-defined]
+            if config.run_dir:
+                runs_mod.clear(config.run_dir)
+            return self._send(200, {"cleared": True})
+        if parts == ["debug", "clear-notes"]:
+            # Start a demo from an empty workspace: the notes outlive tasks by
+            # design, so a recording that wants "find five places, then pick one"
+            # has to begin with none of yesterday's five still in there.
+            config = self.server.config  # type: ignore[attr-defined]
+            from . import workspace as ws_mod
+
+            path = os.path.join(config.workspace_dir, ws_mod.NOTES) \
+                if config.workspace_dir else ""
+            for target in (path, path + ".old" if path else ""):
+                try:
+                    if target:
+                        os.remove(target)
+                except OSError:
+                    pass
+            return self._send(200, {"cleared": bool(path)})
+
         if parts == ["debug", "spill"]:
             # Test hook, not a feature: move a package's task from the agent's
             # display to the phone's, which is what some apps do to themselves
@@ -1293,6 +1335,30 @@ class Handler(BaseHTTPRequestHandler):
         if not text:
             return self._send(400, {"error": "empty task"})
 
+        # "继续" on an interrupted run: reuse the instruction that was saved and
+        # hand the agent what it had already collected, instead of starting the
+        # whole task over. The marker asks the app to send resume:true.
+        resume_note = ""
+        resume_state: dict = {}
+        if body.get("resume"):
+            from . import runs as runs_mod
+
+            config_now = self.server.config  # type: ignore[attr-defined]
+            saved = runs_mod.load(config_now.run_dir) if config_now.run_dir else {}
+            if runs_mod.resumable(saved):
+                text = str(saved.get("task") or text).strip()
+                found = saved.get("findings") or []
+                resume_note = (
+                    "这次是接着上次被打断的任务继续做。上次停在第 "
+                    f"{int(saved.get('rounds') or 0)} 步，已经查到的内容：\n"
+                    + ("\n".join(f"- {f}" for f in found) if found else "- （还没有结论）")
+                    + "\n不要从头再问一遍，从停下的地方接着做；已经确认过的信息直接用。"
+                )
+                resume_state = saved
+                print(f"[server] resuming {saved.get('task', '')[:40]} "
+                      f"({len(found)} findings, step {int(saved.get('rounds') or 0)}, "
+                      f"{saved.get('package') or 'no app'})")
+
         task_id = uuid.uuid4().hex[:8]
         AUTONOMOUS[task_id] = bool(body.get("autonomous", False))
         # The shell is available by default: it is how an agent opens an app or
@@ -1314,7 +1380,8 @@ class Handler(BaseHTTPRequestHandler):
         if hands_off and config.hands_off_factory is None:
             return self._send(400, {"error": "托管模式不可用（设备不支持）"})
         _update(task_id, hands_off=hands_off)
-        threading.Thread(target=_run, args=(task_id, text, config, hands_off),
+        threading.Thread(target=_run,
+                         args=(task_id, text, config, hands_off, resume_note, resume_state),
                          daemon=True).start()
         self._send(200, {"id": task_id})
 
@@ -1392,6 +1459,36 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(xml.encode())
             return
+        if parts == ["run"]:
+            # What the last run left behind, for the app's "continue?" note.
+            from . import runs as runs_mod
+
+            config = self.server.config  # type: ignore[attr-defined]
+            data = runs_mod.load(config.run_dir) if config.run_dir else {}
+            # A checkpoint written by the run that is happening right now is not
+            # something to resume: there is a live task behind it, and offering
+            # "continue where you left off" while it is still going is noise.
+            with LOCK:
+                live = any(str(t.get("state", "")) in ("running", "waiting", "queued")
+                           for t in TASKS.values())
+            if live or not runs_mod.resumable(data):
+                return self._send(200, {"resumable": False})
+            return self._send(200, {
+                "resumable": True,
+                "summary": runs_mod.summary(data),
+                "task": data.get("task", ""),
+                "rounds": data.get("rounds", 0),
+                "status": data.get("status", ""),
+            })
+
+        if parts == ["run", "clear"]:
+            from . import runs as runs_mod
+
+            config = self.server.config  # type: ignore[attr-defined]
+            if config.run_dir:
+                runs_mod.clear(config.run_dir)
+            return self._send(200, {"cleared": True})
+
         if parts == ["usage"]:
             from .usage import format_report, summary
 

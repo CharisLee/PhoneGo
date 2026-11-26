@@ -507,11 +507,18 @@ class VirtualDisplayDevice(BaseDevice):
         display argument and cannot be aimed at a virtual display.
         """
         forward = direction.lower() in ("down", "forward", "next", "page_down")
-        try:
-            if self._run_bridge_action("beginScroll", "scroll", forward):
-                return True
-        except Exception:  # noqa: BLE001 - fall back to a swipe
-            pass
+        # The accessibility service has no display argument: its scroll happens
+        # on the phone's own screen. On a virtual display it therefore reports
+        # success while our screen never moves -- measured on 大众点评, where a
+        # model scrolled three times, the guard saw an unchanged screen and the
+        # run ended with three of five shops found. The swipe below carries
+        # `input -d <id>`, so it lands where the user is not looking.
+        if self.display_id is None:
+            try:
+                if self._run_bridge_action("beginScroll", "scroll", forward):
+                    return True
+            except Exception:  # noqa: BLE001 - fall back to a swipe
+                pass
         middle = self.width // 2
         if forward:
             return self.swipe(middle, int(self.height * 0.75), middle, int(self.height * 0.30), 300)

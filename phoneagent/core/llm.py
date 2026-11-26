@@ -76,11 +76,20 @@ class OpenAICompatClient:
         self.vision_model = vision_model or model
         self.timeout = timeout
         self.max_tokens = max_tokens
-        # OpenRouter-specific: Qwen3-style models spend the whole budget on
-        # reasoning and return empty content unless this is turned off. Sending
-        # the field to any other provider is at best ignored and at worst a 400,
-        # so it only goes out when the base URL is OpenRouter's.
-        self.disable_reasoning = disable_reasoning and "openrouter.ai" in api_base
+        # Reasoning models spend the whole budget thinking and return empty
+        # content unless it is turned off -- measured on deepseek-flash, where a
+        # screenshot plus tools ate all 800 tokens and the agent reported
+        # "empty_reply: the model neither acted nor answered". The switch has a
+        # different name on every provider, so it only goes out where it is
+        # known: OpenRouter takes ``reasoning``, DeepSeek takes ``thinking``.
+        # Anything else gets nothing, because an unknown field is a 400 there.
+        self.reasoning_style = ""
+        if disable_reasoning:
+            if "openrouter.ai" in api_base:
+                self.reasoning_style = "openrouter"
+            elif "deepseek.com" in api_base:
+                self.reasoning_style = "deepseek"
+        self.disable_reasoning = bool(self.reasoning_style)
         #: Where to append the token counts the provider reports.
         self.usage_path = usage_path
         #: Called with (prompt, completion) for every call, so one task can add
@@ -130,8 +139,7 @@ class OpenAICompatClient:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
-        if self.disable_reasoning:
-            payload["reasoning"] = {"enabled": False}
+        self._reasoning_off(payload)
 
         data = self._post(payload)
         try:
@@ -239,16 +247,22 @@ class OpenAICompatClient:
             print(f"[usage] {type(exc).__name__}: {exc}")
         return data
 
+    def _reasoning_off(self, payload: dict) -> dict:
+        """Ask the provider to skip its thinking block, in its own words."""
+        if self.reasoning_style == "openrouter":
+            payload["reasoning"] = {"enabled": False}
+        elif self.reasoning_style == "deepseek":
+            payload["thinking"] = {"type": "disabled"}
+        return payload
+
     def _chat(self, messages: list[dict], model: str, temperature: float) -> str:
         url = f"{self.api_base}/chat/completions"
-        payload = {
+        payload = self._reasoning_off({
             "model": model,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": self.max_tokens,
-        }
-        if self.disable_reasoning:
-            payload["reasoning"] = {"enabled": False}
+        })
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",

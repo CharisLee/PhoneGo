@@ -84,6 +84,40 @@ def probe(directory: str, port: int) -> str:
 _display_args: dict = {}
 
 
+#: Why adb refused us, in the words the phone can act on. The app shows these
+#: instead of a PyException: "SSL: CERTIFICATE_UNKNOWN" means the pairing on the
+#: phone's side is gone (a framework restart or re-pairing another tool), and
+#: "no listener" means wireless debugging itself is off or was toggled without
+#: its port being recreated. Both need the user, but not the same sentence.
+ADB_PAIRING_LOST = "ADB_PAIRING_LOST"
+ADB_NO_LISTENER = "ADB_NO_LISTENER"
+
+
+def explain_adb_error(exc: BaseException) -> str:
+    """Map an adb handshake failure to one of the two codes above, or ""."""
+    text = f"{type(exc).__name__}: {exc}".lower()
+    if "certificate_unknown" in text or "certificate unknown" in text:
+        return ADB_PAIRING_LOST
+    if "sslv3_alert" in text and "unknown" in text:
+        return ADB_PAIRING_LOST
+    if "connection refused" in text or "econnrefused" in text:
+        return ADB_NO_LISTENER
+    if "connection reset" in text or "timed out" in text:
+        return ADB_NO_LISTENER
+    return ""
+
+
+def _wrap_connect(fn, *args, **kwargs):
+    """Run a connect step and re-raise its failure with a code the phone reads."""
+    try:
+        return fn(*args, **kwargs)
+    except Exception as exc:  # noqa: BLE001 - the code is the point
+        code = explain_adb_error(exc)
+        if code:
+            raise RuntimeError(f"{code}: {exc}") from exc
+        raise
+
+
 def start_display(
     directory: str,
     port: int,
@@ -111,6 +145,12 @@ def start_display(
     from .devices.virtual import HELPER_JAR, VirtualDisplayDevice
 
     device = _device
+    if device is None:
+        # First connection of this run: this is where a lost pairing shows up.
+        try:
+            from .devices.transports import SelfAdbTransport as _T  # noqa: F401
+        except Exception:  # noqa: BLE001 - reported by the real call below
+            pass
     if device is not None:
         # Rebuild in place, on the same object. Two reasons:
         #  - the display the helper owns must be released, or it stays in
@@ -188,7 +228,13 @@ def probe_display(directory: str, port: int, helper_jar: str, host: str = "127.0
     from .devices.transports import SelfAdbTransport
     from .devices.virtual import HELPER_JAR
 
-    client = _connect(directory, port, host)
+    try:
+        client = _connect(directory, port, host)
+    except Exception as exc:  # noqa: BLE001 - re-raised with a code the app reads
+        code = explain_adb_error(exc)
+        if code:
+            raise RuntimeError(f"{code}: {exc}") from exc
+        raise
     transport = SelfAdbTransport(client)
     with open(helper_jar, "rb") as fh:
         transport.write_file(fh.read(), HELPER_JAR)
@@ -473,6 +519,11 @@ def serve(
         map_dirs=[maps_dir, os.path.join(os.path.dirname(memory_path), "crawls")]
         if maps_dir and memory_path else [],
         risk_path=os.path.join(os.path.dirname(memory_path), "app-risks.json"),
+        # where an interrupted run leaves its checkpoint (phoneagent/runs.py)
+        run_dir=os.path.dirname(memory_path) if memory_path else "",
+        # notes a task leaves for the next one (phoneagent/workspace.py)
+        workspace_dir=os.path.join(os.path.dirname(memory_path), "workspace")
+        if memory_path else "",
         pacing_path=os.path.join(os.path.dirname(memory_path), "app-pacing.json"),
         pins_path=os.path.join(os.path.dirname(memory_path), "map-pins.json")
         if memory_path else "",
