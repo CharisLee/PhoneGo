@@ -7,7 +7,7 @@ English · [Chinese](README_CN.md)
 **CLI+GUI · Fast · Powerful · Reliable · Cost-Effective Phone-Use Agent**
 
 <p>
-  <a href="https://github.com/HKUDS/PhoneGo/releases/download/phonego-v0.4.5/PhoneGo-0.4.5-arm64.apk"><img src="https://img.shields.io/badge/%E2%AC%87%20Download-PhoneGo%200.4.5%20%C2%B7%20Android-00d9ff?style=for-the-badge&logo=android&logoColor=white&labelColor=0b0f19" height="34" alt="Download PhoneGo 0.4.5 for Android"></a>
+  <a href="https://github.com/HKUDS/PhoneGo/releases/download/phonego-v0.4.6/PhoneGo-0.4.6-arm64.apk"><img src="https://img.shields.io/badge/%E2%AC%87%20Download-PhoneGo%200.4.6%20%C2%B7%20Android-00d9ff?style=for-the-badge&logo=android&logoColor=white&labelColor=0b0f19" height="34" alt="Download PhoneGo 0.4.6 for Android"></a>
   <a href="#-how-to-use-phonego"><img src="https://img.shields.io/badge/%F0%9F%93%96%20Install-guide-4ecdc4?style=for-the-badge&logoColor=white&labelColor=1a1a2e" height="34" alt="Read the install guide first"></a>
   <a href="https://github.com/HKUDS/PhoneGo/releases"><img src="https://img.shields.io/github/downloads/HKUDS/PhoneGo/total?style=for-the-badge&logo=github&logoColor=white&labelColor=1a1a2e&color=00d9ff&label=downloads" height="34" alt="Total PhoneGo APK downloads"></a>
 </p>
@@ -135,7 +135,7 @@ PhoneGo runs directly on your Android phone—no computer required.
 
 ### 1. Download and Install
 
-Download **[PhoneGo-0.4.5-arm64.apk](https://github.com/HKUDS/PhoneGo/releases/download/phonego-v0.4.5/PhoneGo-0.4.5-arm64.apk)**.
+Download **[PhoneGo-0.4.6-arm64.apk](https://github.com/HKUDS/PhoneGo/releases/download/phonego-v0.4.6/PhoneGo-0.4.6-arm64.apk)**.
 
 **Requirements:** Android 14+ · ARM64
 

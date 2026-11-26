@@ -13,6 +13,49 @@ versions are the app's own — the CLI in this repository has its own history.
 
 ---
 
+## 0.4.6 — 2026-11-27
+
+`PhoneGo-0.4.6-arm64.apk` · SHA-256 `c65cbc5404ed3919faf1ec4739446f8138b3f3e217485731363e15204cbad6d1`
+
+**English**
+
+- **Added**: long tasks now have four things they lacked — a checkpoint
+  (`last-run.json`, written every round, resumable via `/run`), a workspace
+  (`note()`/`notes()`, carried into the next task and saved as a result file),
+  context compaction (older steps fold into a bounded summary instead of being
+  dropped at five), plan milestones (`plan.json`, finished subtasks are skipped
+  on resume) and an answer check (prices, ratings and quoted names are looked up
+  in the notes and on the screen; what cannot be backed up is named).
+- **Fixed**: a captcha hand-over no longer dies at four minutes — the server's
+  stall watchdog counted steps, and waiting for a person produces none.
+- **Fixed**: scrolling on the virtual display. The accessibility scroll acts on
+  the phone's own screen, so it reported success while nothing moved; with a
+  display id the scroll is now a targeted swipe (5-shop task: 32 steps instead
+  of failing at 3 shops).
+- **Fixed**: `CalledFromWrongThreadException` in `append()` — a message sent
+  while the local agent was down killed the process. UI calls are marshalled in
+  one place now, debug builds assert it, and a crash leaves a report behind.
+- **Fixed**: reasoning models returning empty content (DeepSeek ``thinking``,
+  OpenRouter ``reasoning``), launches landing on the phone's display (followed
+  instead of turned into a question), and adb failures now say what to do
+  (pairing lost / no listener) with a 「重新配对」 button.
+
+**中文**
+
+- **新增**：长任务补齐四件事——运行检查点（`last-run.json`，每轮写盘，`/run` 可续）、
+  工作区笔记（`note()`/`notes()`，跨任务携带并留存结果文件）、上下文压缩（早期步骤折叠成
+  有界摘要而不是只留 5 步）、计划里程碑（`plan.json`，续做时跳过已完成子任务）、结论自检
+  （价格/评分/店名回查笔记与屏幕，对不上的如实标出）。
+- **修复**：验证码接管不再在 4 分钟时被杀——服务端看门狗按步骤数判断进展，而等人不产生步骤。
+- **修复**：虚拟屏滚动。无障碍滚动作用在手机自己的屏幕上，所以"成功"但画面不动；有 display id
+  时改用定向 swipe（5 家店任务：32 步完成，而不是找到 3 家就失败）。
+- **修复**：`append()` 的 `CalledFromWrongThreadException`——本地 agent 没起来时发消息会崩进程。
+  UI 调用统一在门面里切线程，debug 包直接断言，崩溃会留下报告。
+- **修复**：推理模型返回空内容（DeepSeek `thinking` / OpenRouter `reasoning`）、启动落到手机屏
+  改成跟随、adb 失败给出可执行提示（配对失效 / 没在监听）并带「重新配对」按钮。
+
+---
+
 ## 0.4.5 — 2026-11-22
 
 `PhoneGo-0.4.5-arm64.apk` · SHA-256 `12dbe4cab5d8ac60d77ded130d2fb9bc7d1cfbee72de2d6778a554d65b5d60df`
